@@ -28,6 +28,7 @@ pub struct Row {
     pub data: Vec<u8>,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct OffsetSize {
     pub offset: u64,
     pub size: u64,

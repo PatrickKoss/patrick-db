@@ -2,10 +2,13 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
-use storageengine::operations::{DbOperations, OffsetSize, NONE_SENTINEL};
+use std::path::PathBuf;
+
 use anyhow::Result;
-use crate::index::{Document, Index, IndexError};
 use bloomfilter::BloomFilter;
+use storageengine::operations::{DbOperations, NONE_SENTINEL, OffsetSize};
+
+use crate::index::{Document, Index, IndexError};
 
 pub struct LsmTree {
     map: BTreeMap<String, OffsetSize>,
@@ -17,8 +20,8 @@ pub struct LsmTree {
 }
 
 impl LsmTree {
-    pub fn new(mut db_operations: Box<dyn DbOperations>, ss_table_path: String, tree_size: usize, bloom_filter_size: usize) -> Result<Self> {
-        let lsm_tree = Self {
+    pub fn new(db_operations: Box<dyn DbOperations>, ss_table_path: String, tree_size: usize, bloom_filter_size: usize) -> Result<Self> {
+        let mut lsm_tree = Self {
             map: BTreeMap::new(),
             db_operations,
             transaction_id: 0,
@@ -29,7 +32,7 @@ impl LsmTree {
         lsm_tree.remove_all_files_ss_table()?;
 
         let mut offset = 0;
-        let rows = db_operations.read_all()?;
+        let rows = lsm_tree.db_operations.read_all()?;
         for row in rows {
             // deleted
             if row.header.cmax != NONE_SENTINEL {
@@ -39,7 +42,7 @@ impl LsmTree {
 
             let doc: Document = bincode::deserialize(&row.data)?;
 
-            lsm_tree.map.insert(doc.id, OffsetSize {
+            lsm_tree.map.insert(doc.id.clone(), OffsetSize {
                 offset,
                 size: row.header.tuple_length,
             });
@@ -66,12 +69,12 @@ impl LsmTree {
             .count();
 
         let file_name = format!("{}/ss_table_{}", self.ss_table_path, count);
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .write(true)
             .read(true)
             .append(true)
             .create(true)
-            .open(filename)?;
+            .open(file_name)?;
         file.write_all(&data)?;
         file.flush()?;
 
@@ -86,10 +89,31 @@ impl LsmTree {
             .collect::<Result<Vec<_>, std::io::Error>>()?
             .iter()
             .for_each(|path| {
-                fs::remove_file(path)?;
+                fs::remove_file(path).expect("Unable to remove file");
             });
 
         Ok(())
+    }
+
+    fn search_in_files(&mut self, id: &str) -> Result<Document> {
+        let files = fs::read_dir(&self.ss_table_path)?
+            .map(|res| res.map(|e| e.path()))
+            .collect::<Result<Vec<PathBuf>, std::io::Error>>()?;
+
+        for file in &files {
+            let data = fs::read(file)?;
+            let map: BTreeMap<String, OffsetSize> = bincode::deserialize(&data)?;
+            match map.get(id) {
+                Some(offset_size) => {
+                    let row = self.db_operations.read_with_offset(offset_size)?;
+                    let doc: Document = bincode::deserialize(&row.data)?;
+                    return Ok(doc);
+                }
+                None => continue,
+            }
+        }
+
+        Err(IndexError::NotFound.into())
     }
 }
 
@@ -98,21 +122,31 @@ impl Index for LsmTree {
         let data = bincode::serialize(&document)?;
         let offset_size = self.db_operations.insert(data, self.transaction_id)?;
         self.map.insert(document.id, offset_size);
+        if self.map.len() == self.tree_size {
+            self.flush_tree_to_disk()?;
+        }
         self.transaction_id += 1;
+
         Ok(())
     }
 
     fn search(&mut self, id: &str) -> Result<Document> {
+        // if item is not in bloom filter, it is not in the db
         if !self.bloom_filter.check(id) {
             return Err(IndexError::NotFound.into());
         }
+
         match self.map.get(id) {
+            // item is in memory
             Some(offset_size) => {
                 let row = self.db_operations.read_with_offset(offset_size)?;
                 let doc: Document = bincode::deserialize(&row.data)?;
                 Ok(doc)
-            },
-            None => Err(IndexError::NotFound.into()),
+            }
+            None => {
+                // item is not in memory, search in all files
+                self.search_in_files(id)
+            }
         }
     }
 
@@ -123,7 +157,7 @@ impl Index for LsmTree {
                 self.map.remove(id);
                 self.transaction_id += 1;
                 Ok(())
-            },
+            }
             None => Err(IndexError::NotFound.into()),
         }
     }
@@ -136,7 +170,7 @@ impl Index for LsmTree {
                 self.map.insert(document.id, new_offset_size);
                 self.transaction_id += 1;
                 Ok(())
-            },
+            }
             None => Err(IndexError::NotFound.into()),
         }
     }
