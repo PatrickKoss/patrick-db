@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Document {
     pub id: String,
     pub value: Vec<u8>,
@@ -11,6 +11,8 @@ pub struct Document {
 pub enum IndexError {
     #[error("NotFound")]
     NotFound,
+    #[error("AlreadyExists")]
+    AlreadyExists,
 }
 
 pub trait Index {

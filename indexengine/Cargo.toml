@@ -12,3 +12,7 @@ anyhow = "1.0.76"
 thiserror = "1.0.51"
 serde = { version = "1.0.193", features = ["derive"] }
 bloomfilter = { path = "../bloomfilter" }
+
+[dev-dependencies]
+mockall = "0.11.4"
+tempfile = { version = "3.8.1", features = [] }

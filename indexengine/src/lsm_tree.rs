@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use bloomfilter::BloomFilter;
+#[cfg(test)]
+use mockall::{mock, predicate::*};
 use serde::{Deserialize, Serialize};
 use storageengine::operations::{DbOperations, NONE_SENTINEL, OffsetSize};
 
@@ -71,6 +73,8 @@ impl LsmTree {
 
     fn flush_tree_to_disk(&mut self) -> Result<()> {
         let data = bincode::serialize(&self.map)?;
+
+        fs::create_dir_all(&self.ss_table_path)?;
 
         let count = fs::read_dir(&self.ss_table_path)?
             .map(|res| res.map(|e| e.path()))
@@ -145,6 +149,7 @@ impl LsmTree {
 
                     self.db_operations.delete_with_offset(&lsm_map_leaf.offset_size, self.transaction_id)?;
                     self.transaction_id += 1;
+                    self.bloom_filter.remove(id);
 
                     lsm_map_leaf.is_deleted = true;
                     // flush to disk
@@ -181,15 +186,21 @@ impl LsmTree {
 
 impl Index for LsmTree {
     fn insert(&mut self, document: Document) -> Result<()> {
+        // check if item is already present
+        if self.search(&document.id).is_ok() {
+            return Err(IndexError::AlreadyExists.into());
+        }
+
         let data = bincode::serialize(&document)?;
         let offset_size = self.db_operations.insert(data, self.transaction_id)?;
-        self.map.insert(document.id, LsmMapLeaf {
+        self.map.insert(document.id.clone(), LsmMapLeaf {
             offset_size,
             is_deleted: false,
         });
         if self.map.len() == self.tree_size {
             self.flush_tree_to_disk()?;
         }
+        self.bloom_filter.insert(document.id);
         self.transaction_id += 1;
 
         Ok(())
@@ -224,6 +235,7 @@ impl Index for LsmTree {
             Some(lsm_map_leaf) => {
                 self.db_operations.delete_with_offset(&lsm_map_leaf.offset_size, self.transaction_id)?;
                 self.map.remove(id);
+                self.bloom_filter.remove(id);
                 self.transaction_id += 1;
                 Ok(())
             }
@@ -253,5 +265,281 @@ impl Index for LsmTree {
                 self.update_ss_table(id, document)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use mockall::predicate;
+    use storageengine::operations::{Header, Row};
+    #[cfg(test)]
+    use tempfile::tempdir;
+
+    use super::*;
+
+    mock! {
+        DbOperationsImpl {}
+        impl DbOperations for DbOperationsImpl {
+            fn insert(&mut self, data: Vec<u8>, transaction_id: u64) -> Result<OffsetSize>;
+            fn read_with_offset(&mut self, offset_size: &OffsetSize) -> Result<Row>;
+            fn read_all(&mut self) -> Result<Vec<Row>>;
+            fn update_with_offset(&mut self, old_offset_size: &OffsetSize, data: Vec<u8>, transaction_id: u64) -> Result<OffsetSize>;
+            fn delete_with_offset(&mut self, offset_size: &OffsetSize, transaction_id: u64) -> Result<()>;
+        }
+    }
+
+    #[test]
+    fn insert_adds_document() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_insert()
+            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
+        mock.expect_read_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }))
+            .times(1)
+            .returning(move |_| Ok(Row {
+                header: Header {
+                    xmin: 0,
+                    cmax: NONE_SENTINEL,
+                    xmax: NONE_SENTINEL,
+                    tuple_length: 3,
+                    table_oid: 0,
+                    ctid: 0,
+                    cmin: 0,
+                },
+                data: data.clone(),
+            }));
+
+        let mut lsm_tree = setup_lsm_tree(mock)?;
+
+        let res = lsm_tree.insert(document.clone());
+
+        assert!(res.is_ok());
+        assert!(!lsm_tree.map.get(&document.id).unwrap().is_deleted);
+        assert!(lsm_tree.bloom_filter.check(&document.id));
+        assert!(lsm_tree.map.get(&document.id).unwrap().offset_size.offset == 0);
+
+        let doc = lsm_tree.search(&document.id)?;
+        assert_eq!(doc, document);
+
+        Ok(())
+    }
+
+    #[test]
+    fn insert_adds_document_flush_ss_table() -> Result<()> {
+        let document = Document { id: "50".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_read_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 50 * 3, size: 51 * 3 }))
+            .times(2)
+            .returning(move |_| Ok(Row {
+                header: Header {
+                    xmin: 0,
+                    cmax: NONE_SENTINEL,
+                    xmax: NONE_SENTINEL,
+                    tuple_length: 3,
+                    table_oid: 0,
+                    ctid: 0,
+                    cmin: 0,
+                },
+                data: data.clone(),
+            }));
+
+        mock.expect_insert()
+            .with(predicate::always(), predicate::always())
+            .times(101)
+            .returning(move |_, _| Ok(OffsetSize { offset: 50 * 3, size: (50 + 1) * 3 }));
+        mock.expect_delete_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 50 * 3, size: (50 + 1) * 3 }), predicate::always())
+            .times(1)
+            .returning(move |_, _| Ok(()));
+
+        let mut lsm_tree = setup_lsm_tree(mock)?;
+
+        for i in 0..100 {
+            let document = Document { id: i.to_string(), value: vec![1, 2, 3] };
+            let res = lsm_tree.insert(document);
+            assert!(res.is_ok());
+        }
+
+        let doc = lsm_tree.search("50")?;
+        assert_eq!(doc, document);
+
+        let updated_document = Document { id: "50".to_string(), value: vec![4, 5, 6] };
+        lsm_tree.update("50", updated_document.clone())?;
+        let res = lsm_tree.search("50");
+        assert!(res.is_ok());
+
+        Ok(())
+    }
+
+    #[test]
+    fn search_returns_document_if_in_memory() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_insert()
+            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
+        mock.expect_read_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }))
+            .times(1)
+            .returning(move |_| Ok(Row {
+                header: Header {
+                    xmin: 0,
+                    cmax: NONE_SENTINEL,
+                    xmax: NONE_SENTINEL,
+                    tuple_length: 3,
+                    table_oid: 0,
+                    ctid: 0,
+                    cmin: 0,
+                },
+                data: data.clone(),
+            }));
+
+        let mut lsm_tree = setup_lsm_tree(mock)?;
+
+        lsm_tree.insert(document.clone())?;
+
+        let doc = lsm_tree.search(&document.id)?;
+
+        assert_eq!(doc, document);
+
+        Ok(())
+    }
+
+    #[test]
+    fn search_returns_error_if_not_found() -> Result<()> {
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+
+        let mut lsm_tree = setup_lsm_tree(mock)?;
+
+        let result = lsm_tree.search("1");
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn delete_removes_document_from_map() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_insert()
+            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
+        mock.expect_delete_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }), predicate::eq(1 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(()));
+
+        let mut lsm_tree = setup_lsm_tree(mock)?;
+        lsm_tree.insert(document.clone())?;
+        lsm_tree.delete(&document.id)?;
+
+        assert!(lsm_tree.map.get(&document.id).is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn delete_returns_error_if_not_found() -> Result<()> {
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+
+        let mut lsm_tree = setup_lsm_tree(mock)?;
+
+        let result = lsm_tree.delete("1");
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_modifies_existing_document() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let updated_document = Document { id: "1".to_string(), value: vec![4, 5, 6] };
+        let updated_data = bincode::serialize(&updated_document)?;
+        let updated_data_clone = bincode::serialize(&updated_document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_insert()
+            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
+        mock.expect_read_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 3, size: 3 }))
+            .times(1)
+            .returning(move |_| Ok(Row {
+                header: Header {
+                    xmin: 0,
+                    cmax: NONE_SENTINEL,
+                    xmax: NONE_SENTINEL,
+                    tuple_length: 3,
+                    table_oid: 0,
+                    ctid: 0,
+                    cmin: 0,
+                },
+                data: updated_data_clone.clone(),
+            }));
+        mock.expect_update_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }), predicate::eq(updated_data), predicate::eq(1 as u64))
+            .times(1)
+            .returning(move |_, _, _| Ok(OffsetSize { offset: 3, size: 3 }));
+
+        let mut lsm_tree = setup_lsm_tree(mock)?;
+        lsm_tree.insert(document.clone()).unwrap();
+
+        lsm_tree.update(&updated_document.id, updated_document.clone())?;
+
+        assert!(lsm_tree.map.get(&updated_document.id).is_some());
+        assert!(lsm_tree.map.get(&updated_document.id).unwrap().offset_size.offset == 3);
+
+        let doc = lsm_tree.search(&updated_document.id)?;
+        assert_eq!(doc, updated_document);
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_inserts_new_document_if_not_found() -> Result<()> {
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+
+        let mut lsm_tree = setup_lsm_tree(mock)?;
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+
+        let res = lsm_tree.update(&document.id, document.clone());
+        assert!(res.is_err());
+
+        Ok(())
+    }
+
+    fn setup_lsm_tree(mock_db_operations_impl: MockDbOperationsImpl) -> Result<LsmTree> {
+        let dir = tempdir()?;
+        let path = dir.path().to_path_buf();
+        let db_operations = Box::new(mock_db_operations_impl);
+        Ok(LsmTree::new(db_operations, path.to_str().unwrap().to_string(), 10, 100)?)
     }
 }
