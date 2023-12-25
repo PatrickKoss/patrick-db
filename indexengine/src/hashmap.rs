@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-
 use storageengine::operations::{DbOperations, NONE_SENTINEL, OffsetSize};
 
 use crate::index::{Document, Index, IndexError};
@@ -89,3 +88,195 @@ impl Index for HashMapIndex {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    #[cfg(test)]
+    use mockall::mock;
+    use mockall::predicate;
+    use storageengine::operations::{Header, Row};
+
+    use super::*;
+
+    mock! {
+        DbOperationsImpl {}
+        impl DbOperations for DbOperationsImpl {
+            fn insert(&mut self, data: Vec<u8>, transaction_id: u64) -> Result<OffsetSize>;
+            fn read_with_offset(&mut self, offset_size: &OffsetSize) -> Result<Row>;
+            fn read_all(&mut self) -> Result<Vec<Row>>;
+            fn update_with_offset(&mut self, old_offset_size: &OffsetSize, data: Vec<u8>, transaction_id: u64) -> Result<OffsetSize>;
+            fn delete_with_offset(&mut self, offset_size: &OffsetSize, transaction_id: u64) -> Result<()>;
+        }
+    }
+
+    #[test]
+    fn insert_adds_document() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_insert()
+            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
+
+        let mut hashmap = setup_btree(mock)?;
+
+        let res = hashmap.insert(document.clone());
+
+        assert!(res.is_ok());
+        assert!(hashmap.map.get(&document.id).is_some());
+
+        let offset_size = hashmap.map.get(&document.id).unwrap();
+        assert_eq!(offset_size.offset, 0);
+        assert_eq!(offset_size.size, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn search_returns_document_if_in_memory() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_insert()
+            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
+        mock.expect_read_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }))
+            .times(1)
+            .returning(move |_| Ok(Row {
+                header: Header {
+                    xmin: 0,
+                    cmax: NONE_SENTINEL,
+                    xmax: NONE_SENTINEL,
+                    tuple_length: 3,
+                    table_oid: 0,
+                    ctid: 0,
+                    cmin: 0,
+                },
+                data: data.clone(),
+            }));
+
+        let mut hashmap = setup_btree(mock)?;
+        hashmap.insert(document.clone())?;
+
+        let doc = hashmap.search(&document.id)?;
+
+        assert_eq!(doc, document);
+
+        Ok(())
+    }
+
+    #[test]
+    fn search_returns_error_if_not_found() -> Result<()> {
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+
+        let mut hashmap = setup_btree(mock)?;
+
+        let result = hashmap.search("1");
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn delete_removes_document_from_map() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_insert()
+            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
+        mock.expect_delete_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }), predicate::eq(1 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(()));
+
+        let mut hashmap = setup_btree(mock)?;
+        hashmap.insert(document.clone())?;
+        hashmap.delete(&document.id)?;
+
+        assert!(hashmap.map.get(&document.id).is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn delete_returns_error_if_not_found() -> Result<()> {
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+
+        let mut hashmap = setup_btree(mock)?;
+
+        let result = hashmap.delete("1");
+
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_modifies_existing_document() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+        let data = bincode::serialize(&document)?;
+
+        let updated_document = Document { id: "1".to_string(), value: vec![4, 5, 6] };
+        let updated_data = bincode::serialize(&updated_document)?;
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+        mock.expect_insert()
+            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .times(1)
+            .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
+        mock.expect_update_with_offset()
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }), predicate::eq(updated_data), predicate::eq(1 as u64))
+            .times(1)
+            .returning(move |_, _, _| Ok(OffsetSize { offset: 0, size: 3 }));
+
+        let mut hashmap = setup_btree(mock)?;
+        hashmap.insert(document.clone())?;
+
+        hashmap.update(&updated_document.id, updated_document.clone())?;
+
+        assert!(hashmap.map.get(&updated_document.id).is_some());
+
+        let offset_size = hashmap.map.get(&updated_document.id).unwrap();
+        assert_eq!(offset_size.offset, 0);
+        assert_eq!(offset_size.size, 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_inserts_new_document_if_not_found() -> Result<()> {
+        let document = Document { id: "1".to_string(), value: vec![1, 2, 3] };
+
+        let mut mock = MockDbOperationsImpl::new();
+        mock.expect_read_all().times(1).returning(move || Ok(vec![]));
+
+        let mut hashmap = setup_btree(mock)?;
+
+        let res = hashmap.update(&document.id, document.clone());
+        assert!(res.is_err());
+
+        Ok(())
+    }
+
+    fn setup_btree(mock_db_operations_impl: MockDbOperationsImpl) -> Result<HashMapIndex> {
+        let db_operations = Box::new(mock_db_operations_impl);
+        Ok(HashMapIndex::new(db_operations)?)
+    }
+}
+
