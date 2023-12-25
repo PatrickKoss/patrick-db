@@ -1,4 +1,5 @@
 use std::env;
+use std::str::FromStr;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -14,11 +15,35 @@ enum Action {
     Delete { key: String },
 }
 
+#[derive(Debug, Clone)]
+enum IndexEngine {
+    BTree,
+    LSMTree,
+    NoIndex,
+    HashMap,
+}
+
+impl FromStr for IndexEngine {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "BTree" => Ok(IndexEngine::BTree),
+            "LSMTree" => Ok(IndexEngine::LSMTree),
+            "NoIndex" => Ok(IndexEngine::NoIndex),
+            "HashMap" => Ok(IndexEngine::HashMap),
+            _ => Err("no match"),
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long, default_value = "patrick.db")]
     file: String,
+    #[arg(short, long, default_value = "BTree")]
+    index_engine: IndexEngine,
     #[command(subcommand)]
     action: Action,
 }
@@ -28,7 +53,12 @@ fn main() -> Result<()> {
     let file_name = env::var("FILE").ok().unwrap_or(args.file);
     let file_handler = storageengine::file_handler::FileHandlerImpl::new(&file_name)?;
     let operations = storageengine::operations::DbOperationsImpl::new(Box::new(file_handler));
-    let mut index_engine = NoIndex::new(Box::new(operations));
+    let mut index_engine: Box<dyn Index> = match args.index_engine {
+        IndexEngine::BTree => indexengine::new_index_engine(indexengine::IndexEngine::BTree, Box::new(operations)).expect("failed to create btree"),
+        IndexEngine::LSMTree => indexengine::new_index_engine(indexengine::IndexEngine::LSM, Box::new(operations)).expect("failed to create lsm"),
+        IndexEngine::NoIndex => Box::new(NoIndex::new(Box::new(operations))),
+        IndexEngine::HashMap => indexengine::new_index_engine(indexengine::IndexEngine::HashMap, Box::new(operations)).expect("failed to create hashmap"),
+    };
 
     match args.action {
         Action::Add { key, value } => {

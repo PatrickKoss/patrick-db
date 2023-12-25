@@ -6,17 +6,24 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use bloomfilter::BloomFilter;
+use serde::{Deserialize, Serialize};
 use storageengine::operations::{DbOperations, NONE_SENTINEL, OffsetSize};
 
 use crate::index::{Document, Index, IndexError};
 
 pub struct LsmTree {
-    map: BTreeMap<String, OffsetSize>,
+    map: BTreeMap<String, LsmMapLeaf>,
     db_operations: Box<dyn DbOperations>,
     transaction_id: u64,
     bloom_filter: BloomFilter,
     tree_size: usize,
     ss_table_path: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub struct LsmMapLeaf {
+    offset_size: OffsetSize,
+    is_deleted: bool,
 }
 
 impl LsmTree {
@@ -42,9 +49,12 @@ impl LsmTree {
 
             let doc: Document = bincode::deserialize(&row.data)?;
 
-            lsm_tree.map.insert(doc.id.clone(), OffsetSize {
-                offset,
-                size: row.header.tuple_length,
+            lsm_tree.map.insert(doc.id.clone(), LsmMapLeaf {
+                offset_size: OffsetSize {
+                    offset,
+                    size: row.header.tuple_length,
+                },
+                is_deleted: false,
             });
             lsm_tree.bloom_filter.insert(doc.id);
             if lsm_tree.map.len() == lsm_tree.tree_size {
@@ -64,9 +74,7 @@ impl LsmTree {
 
         let count = fs::read_dir(&self.ss_table_path)?
             .map(|res| res.map(|e| e.path()))
-            .collect::<Result<Vec<_>, std::io::Error>>()?
-            .iter()
-            .count();
+            .collect::<Result<Vec<_>, std::io::Error>>()?.len();
 
         let file_name = format!("{}/ss_table_{}", self.ss_table_path, count);
         let mut file = OpenOptions::new()
@@ -102,10 +110,10 @@ impl LsmTree {
 
         for file in &files {
             let data = fs::read(file)?;
-            let map: BTreeMap<String, OffsetSize> = bincode::deserialize(&data)?;
+            let map: BTreeMap<String, LsmMapLeaf> = bincode::deserialize(&data)?;
             match map.get(id) {
-                Some(offset_size) => {
-                    let row = self.db_operations.read_with_offset(offset_size)?;
+                Some(lsm_map_leaf) => {
+                    let row = self.db_operations.read_with_offset(&lsm_map_leaf.offset_size)?;
                     let doc: Document = bincode::deserialize(&row.data)?;
                     return Ok(doc);
                 }
@@ -115,13 +123,70 @@ impl LsmTree {
 
         Err(IndexError::NotFound.into())
     }
+
+    fn mark_ss_table_as_deleted(&mut self, id: &str) -> Result<()> {
+        let files = fs::read_dir(&self.ss_table_path)?
+            .map(|res| res.map(|e| e.path()))
+            .collect::<Result<Vec<PathBuf>, std::io::Error>>()?;
+
+        for file in &files {
+            let file_name = match file.file_name() {
+                Some(name) => name.to_string_lossy().into_owned(),
+                None => continue,
+            };
+
+            let data = fs::read(file)?;
+            let mut map: BTreeMap<String, LsmMapLeaf> = bincode::deserialize(&data)?;
+            match map.get_mut(id) {
+                Some(lsm_map_leaf) => {
+                    if lsm_map_leaf.is_deleted {
+                        continue;
+                    }
+
+                    self.db_operations.delete_with_offset(&lsm_map_leaf.offset_size, self.transaction_id)?;
+                    self.transaction_id += 1;
+
+                    lsm_map_leaf.is_deleted = true;
+                    // flush to disk
+                    let lsm_tree_data = bincode::serialize(&map)?;
+                    let mut f = OpenOptions::new()
+                        .write(true)
+                        .read(true)
+                        .append(true)
+                        .create(true)
+                        .open(file_name)?;
+                    f.write_all(&lsm_tree_data)?;
+                    f.flush()?;
+                    return Ok(());
+                }
+                None => continue,
+            }
+        }
+
+        Err(IndexError::NotFound.into())
+    }
+
+    fn update_ss_table(&mut self, id: &str, document: Document) -> Result<()> {
+        match self.mark_ss_table_as_deleted(id) {
+            Ok(_) => {
+                self.insert(document)?;
+                Ok(())
+            }
+            Err(err) => {
+                Err(err)
+            }
+        }
+    }
 }
 
 impl Index for LsmTree {
     fn insert(&mut self, document: Document) -> Result<()> {
         let data = bincode::serialize(&document)?;
         let offset_size = self.db_operations.insert(data, self.transaction_id)?;
-        self.map.insert(document.id, offset_size);
+        self.map.insert(document.id, LsmMapLeaf {
+            offset_size,
+            is_deleted: false,
+        });
         if self.map.len() == self.tree_size {
             self.flush_tree_to_disk()?;
         }
@@ -138,8 +203,8 @@ impl Index for LsmTree {
 
         match self.map.get(id) {
             // item is in memory
-            Some(offset_size) => {
-                let row = self.db_operations.read_with_offset(offset_size)?;
+            Some(lsm_map_leaf) => {
+                let row = self.db_operations.read_with_offset(&lsm_map_leaf.offset_size)?;
                 let doc: Document = bincode::deserialize(&row.data)?;
                 Ok(doc)
             }
@@ -151,27 +216,42 @@ impl Index for LsmTree {
     }
 
     fn delete(&mut self, id: &str) -> Result<()> {
+        if !self.bloom_filter.check(id) {
+            return Err(IndexError::NotFound.into());
+        }
+
         match self.map.get(id) {
-            Some(offset_size) => {
-                self.db_operations.delete_with_offset(offset_size, self.transaction_id)?;
+            Some(lsm_map_leaf) => {
+                self.db_operations.delete_with_offset(&lsm_map_leaf.offset_size, self.transaction_id)?;
                 self.map.remove(id);
                 self.transaction_id += 1;
                 Ok(())
             }
-            None => Err(IndexError::NotFound.into()),
+            None => {
+                self.mark_ss_table_as_deleted(id)
+            }
         }
     }
 
     fn update(&mut self, id: &str, document: Document) -> Result<()> {
+        if !self.bloom_filter.check(id) {
+            return Err(IndexError::NotFound.into());
+        }
+
         match self.map.get(id) {
-            Some(offset_size) => {
+            Some(lsm_map_leaf) => {
                 let data = bincode::serialize(&document)?;
-                let new_offset_size = self.db_operations.update_with_offset(offset_size, data, self.transaction_id)?;
-                self.map.insert(document.id, new_offset_size);
+                let new_offset_size = self.db_operations.update_with_offset(&lsm_map_leaf.offset_size, data, self.transaction_id)?;
+                self.map.insert(document.id, LsmMapLeaf {
+                    offset_size: new_offset_size,
+                    is_deleted: false,
+                });
                 self.transaction_id += 1;
                 Ok(())
             }
-            None => Err(IndexError::NotFound.into()),
+            None => {
+                self.update_ss_table(id, document)
+            }
         }
     }
 }
