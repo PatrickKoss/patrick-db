@@ -33,76 +33,19 @@ impl Watcher for NoopWatcher {
 }
 
 impl ZooKeeperConfigManager {
-    pub fn new(service_registry_path: &str, latch_path: &str, instance_address: &str, zookeeper_urls: &str) -> Result<Self> {
-        let zk = match ZooKeeper::connect(&*zookeeper_urls, Duration::from_millis(2500), NoopWatcher) {
-            Ok(zk) => zk,
-            Err(e) => {
-                log::error!("Failed to connect to ZooKeeper: {:?}", e);
-                return Err(e.into());
-            }
-        };
-
-        let zk_arc = Arc::new(zk);
-
-        // Ensure the parent node for service registry exists
-        let exists = zk_arc.exists(service_registry_path, false).unwrap();
-        if exists.is_none() {
-            // Parent node doesn't exist, so create it
-            zk_arc.create(service_registry_path, Vec::from(b""), Acl::open_unsafe().clone(), CreateMode::Persistent).unwrap();
-        }
-
+    pub fn new(service_registry_path: &str, leader_election_path: &str, instance_address: &str, zookeeper_urls: &str) -> Result<Self> {
+        let zk_arc = connect_to_zookeeper(zookeeper_urls)?;
+        ensure_parent_node_exists(&zk_arc, service_registry_path)?;
         let instances = Arc::new(RwLock::new(Vec::<Instance>::new()));
+        watch_service_changes(&zk_arc, service_registry_path, &instances)?;
+        let service_id = register_service(&zk_arc, service_registry_path, instance_address)?;
+        let latch = setup_leader_latch(&zk_arc, &service_id, leader_election_path)?;
 
-        let service_path = service_registry_path.to_owned();
-        let zk_arc_clone = Arc::clone(&zk_arc);
-        let instances_clone = Arc::clone(&instances);
-        zk_arc.get_children_w(&service_registry_path, move |_| {
-            log::info!("Service path changed: {}", &service_path);
-            let zk_arc_clone = Arc::clone(&zk_arc_clone);
-            let service_ids = match zk_arc_clone.get_children(&service_path, false) {
-                Ok(ids) => ids,
-                Err(e) => {
-                    log::error!("Error getting children for service path {}: {:?}", service_path, e);
-                    return;
-                }
-            };
-            for service_id in service_ids {
-                let service_path = format!("{}/{}", &service_path, service_id);
-                let zk_arc_clone = Arc::clone(&zk_arc_clone);
-                match zk_arc_clone.get_data(&service_path, false) {
-                    Ok((data, _)) => {
-                        // Assuming the service URL is stored as a String
-                        let service_url = String::from_utf8_lossy(&data);
-                        instances_clone.write().unwrap().push(Instance {
-                            id: service_id.clone(),
-                            address: service_url.to_string(),
-                        });
-                        log::info!("Discovered service: {}, URL: {}", service_id, service_url);
-                    }
-                    Err(e) => log::error!("Error getting data for service {}: {:?}", service_id, e),
-                }
-            }
-        })?;
-
-        // Register service
-        let service_id = Uuid::new_v4().to_string();
-        let service_path = format!("{}/{}", service_registry_path, service_id);
-        let acls = Acl::open_unsafe().clone();
-        zk_arc.create(&service_path, Vec::from(instance_address), acls, CreateMode::Ephemeral).unwrap();
-
-        log::info!("Service registered with ID: {}", service_id);
-
-        // LeaderLatch setup
-        let latch = LeaderLatch::new(zk_arc.clone(), service_id.clone(), latch_path.into());
-        latch.start()?;
-
-        let zookeeper_config_manager = ZooKeeperConfigManager {
+        Ok(Self {
             service_id,
             latch,
-            instances: instances.clone(),
-        };
-
-        Ok(zookeeper_config_manager)
+            instances,
+        })
     }
 }
 
@@ -138,4 +81,81 @@ impl ConfigManager for ZooKeeperConfigManager {
     fn get_name(&self) -> String {
         return self.service_id.clone();
     }
+}
+
+fn connect_to_zookeeper(zookeeper_urls: &str) -> Result<Arc<ZooKeeper>> {
+    match ZooKeeper::connect(&*zookeeper_urls, Duration::from_millis(2500), NoopWatcher) {
+        Ok(zk) => Ok(Arc::new(zk)),
+        Err(e) => {
+            log::error!("Failed to connect to ZooKeeper: {:?}", e);
+            Err(e.into())
+        }
+    }
+}
+
+fn ensure_parent_node_exists(zk_arc: &Arc<ZooKeeper>, service_registry_path: &str) -> Result<()> {
+    let exists = zk_arc.exists(service_registry_path, false)?;
+    if exists.is_none() {
+        zk_arc.create(service_registry_path, Vec::from(b""), Acl::open_unsafe().clone(), CreateMode::Persistent)?;
+    }
+
+    Ok(())
+}
+
+fn watch_service_changes(zk_arc: &Arc<ZooKeeper>, service_registry_path: &str, instances: &Arc<RwLock<Vec<Instance>>>) -> Result<()> {
+    let service_path = service_registry_path.to_owned();
+    let zk_arc_clone = Arc::clone(&zk_arc);
+    let instances_clone = Arc::clone(&instances);
+
+    zk_arc.get_children_w(&service_registry_path, move |_| {
+        handle_service_change(&zk_arc_clone, &service_path, &instances_clone)
+    })?;
+
+    Ok(())
+}
+
+fn handle_service_change(zk_arc: &Arc<ZooKeeper>, service_discovery_path: &str, instances: &Arc<RwLock<Vec<Instance>>>) {
+    log::info!("new instance added to service discovery");
+    let service_ids = match zk_arc.get_children(&service_discovery_path, false) {
+        Ok(ids) => ids,
+        Err(e) => {
+            log::error!("Error getting children for service path {}: {:?}", service_discovery_path, e);
+            return;
+        }
+    };
+    for service_id in service_ids {
+        handle_instance_id(&zk_arc, &service_discovery_path, &service_id, &instances);
+    }
+}
+
+fn handle_instance_id(zk_arc: &Arc<ZooKeeper>, service_discovery_path: &str, instance_id: &str, instances: &Arc<RwLock<Vec<Instance>>>) {
+    let service_path = format!("{}/{}", &service_discovery_path, instance_id);
+
+    match zk_arc.get_data(&service_path, false) {
+        Ok((data, _)) => {
+            let instance_address = String::from_utf8_lossy(&data);
+            instances.write().unwrap().push(Instance {
+                id: instance_id.parse().unwrap(),
+                address: instance_address.to_string(),
+            });
+            log::info!("Discovered instance: {}, Address: {}", instance_id, instance_address);
+        }
+        Err(e) => log::error!("Error getting data for service {}: {:?}", instance_id, e),
+    }
+}
+
+fn register_service(zk_arc: &Arc<ZooKeeper>, service_registry_path: &str, instance_address: &str) -> Result<String> {
+    let service_id = Uuid::new_v4().to_string();
+    let service_path = format!("{}/{}", service_registry_path, service_id);
+    zk_arc.create(&service_path, Vec::from(instance_address), Acl::open_unsafe().clone(), CreateMode::Ephemeral)?;
+    log::info!("Service registered with ID: {}", service_id);
+
+    Ok(service_id)
+}
+
+fn setup_leader_latch(zk_arc: &Arc<ZooKeeper>, service_id: &str, leader_election_path: &str) -> Result<LeaderLatch> {
+    let latch = LeaderLatch::new(zk_arc.clone(), service_id.parse()?, leader_election_path.into());
+    latch.start()?;
+
+    Ok(latch)
 }
