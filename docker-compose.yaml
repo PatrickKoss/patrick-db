@@ -1,0 +1,53 @@
+version: '3'
+services:
+  zoo1:
+    image: zookeeper
+    restart: always
+    hostname: zoo1
+    ports:
+      - 2181:2181
+    environment:
+      ZOO_MY_ID: 1
+      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 server.2=zoo2:2888:3888;2181 server.3=zoo3:2888:3888;2181
+
+  zoo2:
+    image: zookeeper
+    restart: always
+    hostname: zoo2
+    ports:
+      - 2182:2181
+    environment:
+      ZOO_MY_ID: 2
+      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 server.2=zoo2:2888:3888;2181 server.3=zoo3:2888:3888;2181
+
+  zoo3:
+    image: zookeeper
+    restart: always
+    hostname: zoo3
+    ports:
+      - 2183:2181
+    environment:
+      ZOO_MY_ID: 3
+      ZOO_SERVERS: server.1=zoo1:2888:3888;2181 server.2=zoo2:2888:3888;2181 server.3=zoo3:2888:3888;2181
+  zookeeperapp:
+    build: ./zookeeper
+    container_name: "zookeeperapp"
+    environment:
+      - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
+      # - ZOOKEEPER_SERVERS=test:1234
+    volumes:
+      - ./zookeeper:/app
+    command: sh -c "cargo watch -x run"
+  zookeeperapp2:
+    build: ./zookeeper
+    container_name: "zookeeperapp2"
+    environment:
+      - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
+      # - ZOOKEEPER_SERVERS=test:1234
+    volumes:
+      - ./zookeeper:/app
+    command: sh -c "cargo watch -x run"
+
+volumes:
+  zookeeper_data:
+  zookeeper_datalog:
