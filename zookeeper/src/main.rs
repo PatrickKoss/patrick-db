@@ -2,21 +2,14 @@ extern crate env_logger;
 extern crate uuid;
 extern crate zookeeper;
 
-use std::{env, sync::Arc, thread, time::Duration};
+use std::{env, thread, time::Duration};
 
-use uuid::Uuid;
-use zookeeper::{recipes::leader::LeaderLatch, WatchedEvent, Watcher, ZooKeeper, CreateMode, Acl};
+use crate::config_manager::ConfigManager;
+
+mod config_manager;
 
 const LATCH_PATH: &str = "/latch-ex";
 const SERVICE_REGISTRY_PATH: &str = "/services";
-
-struct NoopWatcher;
-
-impl Watcher for NoopWatcher {
-    fn handle(&self, e: WatchedEvent) {
-        println!("WatchedEvent: {:?}", e);
-    }
-}
 
 fn zk_server_urls() -> String {
     let key = "ZOOKEEPER_SERVERS";
@@ -30,55 +23,27 @@ fn main() {
     let zk_urls = zk_server_urls();
     log::info!("connecting to {}", &zk_urls);
 
-    let zk = match ZooKeeper::connect(&*zk_urls, Duration::from_millis(2500), NoopWatcher) {
-        Ok(zk) => zk,
-        Err(e) => {
-            log::error!("Failed to connect to ZooKeeper: {:?}", e);
-            return;
-        }
-    };
-
-    let zk_arc = Arc::new(zk);
-
-    // Ensure the parent node for service registry exists
-    let exists = zk_arc.exists(SERVICE_REGISTRY_PATH, false).unwrap();
-    if exists.is_none() {
-        // Parent node doesn't exist, so create it
-        zk_arc.create(SERVICE_REGISTRY_PATH, Vec::from(b""), Acl::open_unsafe().clone(), CreateMode::Persistent).unwrap();
-    }
-
-    // Register service
-    let service_id = Uuid::new_v4().to_string();
-    let service_path = format!("{}/{}", SERVICE_REGISTRY_PATH, service_id);
-    let acls = Acl::open_unsafe().clone();
-    zk_arc.create(&service_path, Vec::from(service_url), acls, CreateMode::Ephemeral).unwrap();
-
-    log::info!("Service registered with ID: {}", service_id);
-
-    // LeaderLatch setup
-    let latch = LeaderLatch::new(zk_arc.clone(), service_id.clone(), LATCH_PATH.into());
-    latch.start().unwrap();
+    let zookeeper_config_manager = config_manager::ZooKeeperConfigManager::new(SERVICE_REGISTRY_PATH, LATCH_PATH, &service_url, &zk_urls).unwrap();
 
     loop {
-        if latch.has_leadership() {
-            log::info!("{:?} is the leader", service_id);
+        if zookeeper_config_manager.is_leader() {
+            log::info!("{:?} is the leader", zookeeper_config_manager.get_name());
         } else {
-            log::info!("{:?} is a follower", service_id);
+            log::info!("{:?} is a follower", zookeeper_config_manager.get_name());
         }
 
-        // Discover registered services
-        if let Ok(services) = zk_arc.get_children(SERVICE_REGISTRY_PATH, false) {
-            for service_id in services {
-                let service_path = format!("{}/{}", SERVICE_REGISTRY_PATH, service_id);
-                match zk_arc.get_data(&service_path, false) {
-                    Ok((data, _)) => {
-                        // Assuming the service URL is stored as a String
-                        let service_url = String::from_utf8_lossy(&data);
-                        log::info!("Discovered service: {}, URL: {}", service_id, service_url);
-                    }
-                    Err(e) => log::error!("Error getting data for service {}: {:?}", service_id, e),
+        match zookeeper_config_manager.get_leader_address() {
+            Ok(leader_address) => log::info!("leader: {}", leader_address),
+            Err(e) => log::error!("Error getting leader address: {:?}", e),
+        }
+
+        match zookeeper_config_manager.get_follower_addresses() {
+            Ok(follower_addresses) => {
+                for follower_address in follower_addresses {
+                    log::info!("follower: {}", follower_address);
                 }
             }
+            Err(e) => log::error!("Error getting follower addresses: {:?}", e),
         }
 
         thread::sleep(Duration::from_millis(10000));
