@@ -1,17 +1,23 @@
 use std::collections::BTreeMap;
+use std::hash::Hash;
+use std::marker::PhantomData;
 
 use anyhow::Result;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+
 use storageengine::operations::{DbOperations, NONE_SENTINEL, OffsetSize};
 
 use crate::index::{Document, Index, IndexError};
 
-pub struct BTree {
-    map: BTreeMap<String, OffsetSize>,
+pub struct BTree<K, V> {
+    map: BTreeMap<K, OffsetSize>,
     db_operations: Box<dyn DbOperations>,
     transaction_id: u64,
+    phatom: PhantomData<(K, V)>,
 }
 
-impl BTree {
+impl<K, V> BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord, V: Serialize + DeserializeOwned {
     pub fn new(mut db_operations: Box<dyn DbOperations>) -> Result<Self> {
         let mut map = BTreeMap::new();
         let mut offset = 0;
@@ -23,7 +29,7 @@ impl BTree {
                 continue;
             }
 
-            let doc: Document = bincode::deserialize(&row.data)?;
+            let doc: Document<K, V> = bincode::deserialize(&row.data)?;
 
             map.insert(doc.id, OffsetSize {
                 offset,
@@ -39,12 +45,13 @@ impl BTree {
             map,
             db_operations,
             transaction_id: map_len as u64,
+            phatom: PhantomData,
         })
     }
 }
 
-impl Index for BTree {
-    fn insert(&mut self, document: Document) -> Result<()> {
+impl<K, V> Index<K, V> for BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord, V: Serialize + DeserializeOwned {
+    fn insert(&mut self, document: Document<K, V>) -> Result<()> {
         let data = bincode::serialize(&document)?;
         let offset_size = self.db_operations.insert(data, self.transaction_id)?;
         self.map.insert(document.id, offset_size);
@@ -52,18 +59,18 @@ impl Index for BTree {
         Ok(())
     }
 
-    fn search(&mut self, id: &str) -> Result<Document> {
+    fn search(&mut self, id: &K) -> Result<Document<K, V>> {
         match self.map.get(id) {
             Some(offset_size) => {
                 let row = self.db_operations.read_with_offset(offset_size)?;
-                let doc: Document = bincode::deserialize(&row.data)?;
+                let doc: Document<K, V> = bincode::deserialize(&row.data)?;
                 Ok(doc)
             }
             None => Err(IndexError::NotFound.into()),
         }
     }
 
-    fn delete(&mut self, id: &str) -> Result<()> {
+    fn delete(&mut self, id: &K) -> Result<()> {
         match self.map.get(id) {
             Some(offset_size) => {
                 self.db_operations.delete_with_offset(offset_size, self.transaction_id)?;
@@ -75,7 +82,7 @@ impl Index for BTree {
         }
     }
 
-    fn update(&mut self, id: &str, document: Document) -> Result<()> {
+    fn update(&mut self, id: &K, document: Document<K, V>) -> Result<()> {
         match self.map.get(id) {
             Some(offset_size) => {
                 let data = bincode::serialize(&document)?;
@@ -92,6 +99,7 @@ impl Index for BTree {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+
     #[cfg(test)]
     use mockall::mock;
     use mockall::predicate;
@@ -118,7 +126,7 @@ mod tests {
         let mut mock = MockDbOperationsImpl::new();
         mock.expect_read_all().times(1).returning(move || Ok(vec![]));
         mock.expect_insert()
-            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .with(predicate::eq(data.clone()), predicate::eq(0_u64))
             .times(1)
             .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
 
@@ -144,7 +152,7 @@ mod tests {
         let mut mock = MockDbOperationsImpl::new();
         mock.expect_read_all().times(1).returning(move || Ok(vec![]));
         mock.expect_insert()
-            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .with(predicate::eq(data.clone()), predicate::eq(0_u64))
             .times(1)
             .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
         mock.expect_read_with_offset()
@@ -178,9 +186,9 @@ mod tests {
         let mut mock = MockDbOperationsImpl::new();
         mock.expect_read_all().times(1).returning(move || Ok(vec![]));
 
-        let mut btree = setup_btree(mock)?;
+        let mut btree: BTree<String, i32> = setup_btree(mock)?;
 
-        let result = btree.search("1");
+        let result = btree.search(&"1".to_string());
 
         assert!(result.is_err());
 
@@ -195,11 +203,11 @@ mod tests {
         let mut mock = MockDbOperationsImpl::new();
         mock.expect_read_all().times(1).returning(move || Ok(vec![]));
         mock.expect_insert()
-            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .with(predicate::eq(data.clone()), predicate::eq(0_u64))
             .times(1)
             .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
         mock.expect_delete_with_offset()
-            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }), predicate::eq(1 as u64))
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }), predicate::eq(1_u64))
             .times(1)
             .returning(move |_, _| Ok(()));
 
@@ -217,9 +225,9 @@ mod tests {
         let mut mock = MockDbOperationsImpl::new();
         mock.expect_read_all().times(1).returning(move || Ok(vec![]));
 
-        let mut btree = setup_btree(mock)?;
+        let mut btree: BTree<String, i32> = setup_btree(mock)?;
 
-        let result = btree.delete("1");
+        let result = btree.delete(&"1".to_string());
 
         assert!(result.is_err());
 
@@ -237,11 +245,11 @@ mod tests {
         let mut mock = MockDbOperationsImpl::new();
         mock.expect_read_all().times(1).returning(move || Ok(vec![]));
         mock.expect_insert()
-            .with(predicate::eq(data.clone()), predicate::eq(0 as u64))
+            .with(predicate::eq(data.clone()), predicate::eq(0_u64))
             .times(1)
             .returning(move |_, _| Ok(OffsetSize { offset: 0, size: 3 }));
         mock.expect_update_with_offset()
-            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }), predicate::eq(updated_data), predicate::eq(1 as u64))
+            .with(predicate::eq(&OffsetSize { offset: 0, size: 3 }), predicate::eq(updated_data), predicate::eq(1_u64))
             .times(1)
             .returning(move |_, _, _| Ok(OffsetSize { offset: 0, size: 3 }));
 
@@ -274,8 +282,10 @@ mod tests {
         Ok(())
     }
 
-    fn setup_btree(mock_db_operations_impl: MockDbOperationsImpl) -> Result<BTree> {
+    fn setup_btree<K, V>(mock_db_operations_impl: MockDbOperationsImpl) -> Result<BTree<K, V>>
+        where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord, V: Serialize + DeserializeOwned
+    {
         let db_operations = Box::new(mock_db_operations_impl);
-        Ok(BTree::new(db_operations)?)
+        BTree::new(db_operations)
     }
 }

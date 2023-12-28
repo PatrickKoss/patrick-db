@@ -53,7 +53,7 @@ fn main() -> Result<()> {
     let file_name = env::var("FILE").ok().unwrap_or(args.file);
     let file_handler = storageengine::file_handler::FileHandlerImpl::new(&file_name)?;
     let operations = storageengine::operations::DbOperationsImpl::new(Box::new(file_handler));
-    let mut index_engine: Box<dyn Index> = match args.index_engine {
+    let mut index_engine: Box<dyn Index<String, String>> = match args.index_engine {
         IndexEngine::BTree => indexengine::new_index_engine(indexengine::IndexEngine::BTree, Box::new(operations)).expect("failed to create btree"),
         IndexEngine::LSMTree => indexengine::new_index_engine(indexengine::IndexEngine::LSM, Box::new(operations)).expect("failed to create lsm"),
         IndexEngine::NoIndex => Box::new(NoIndex::new(Box::new(operations))),
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
         Action::Add { key, value } => {
             let document = indexengine::index::Document {
                 id: key.clone(),
-                value: value.clone().into_bytes(),
+                value: value.clone(),
             };
             match index_engine.insert(document) {
                 Ok(_) => println!("inserted {}, {}", key, value),
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
         }
         Action::Get { key } => {
             match index_engine.search(&key) {
-                Ok(document) => println!("{}, {}", key, String::from_utf8(document.value).unwrap()),
+                Ok(document) => println!("{}, {}", key, document.value),
                 Err(e) => println!("failed to get: {}", e),
             }
         }
@@ -86,7 +86,7 @@ fn main() -> Result<()> {
         Action::Update { key, value } => {
             match index_engine.update(&key, indexengine::index::Document {
                 id: key.clone(),
-                value: value.clone().into_bytes(),
+                value: value.clone(),
             }) {
                 Ok(_) => println!("updated {}, {}", key, value),
                 Err(e) => println!("failed to update: {}", e),
