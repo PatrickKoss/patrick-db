@@ -1,0 +1,18 @@
+[package]
+name = "configmanager"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zookeeper = "0.8"
+env_logger = "0.10.1"
+log = { version = "0.4.20", features = [] }
+anyhow = "1.0.76"
+
+[dependencies.uuid]
+version = "1.6.1"
+features = [
+    "v4",
+    "fast-rng",
+    "macro-diagnostics",
+]
