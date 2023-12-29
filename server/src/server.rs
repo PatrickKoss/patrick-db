@@ -1,6 +1,6 @@
 use tonic::{Request, Response, Status, transport::Server};
 
-use key_value_store::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, KeyValue, SetRequest, SetResponse, UpdateRequest, UpdateResponse};
+use key_value_store::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, KeyValue, CreateRequest, CreateResponse, UpdateRequest, UpdateResponse};
 use key_value_store::key_value_service_server::{KeyValueService, KeyValueServiceServer};
 use prost_types::Any;
 use std::string::String;
@@ -36,15 +36,15 @@ impl KeyValueService for KeyValueStoreImpl {
         Ok(Response::new(reply))
     }
 
-    async fn set(&self, request: Request<SetRequest>) -> Result<Response<SetResponse>, Status> {
+    async fn create(&self, _request: Request<CreateRequest>) -> Result<Response<CreateResponse>, Status> {
         todo!()
     }
 
-    async fn update(&self, request: Request<UpdateRequest>) -> Result<Response<UpdateResponse>, Status> {
+    async fn update(&self, _request: Request<UpdateRequest>) -> Result<Response<UpdateResponse>, Status> {
         todo!()
     }
 
-    async fn delete(&self, request: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
+    async fn delete(&self, _request: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
         todo!()
     }
 }
