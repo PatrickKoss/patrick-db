@@ -1,0 +1,240 @@
+syntax = "proto3";
+
+package server;
+
+import "google/protobuf/any.proto";
+import "gnostic/openapi/v3/annotations.proto";
+import "google/api/annotations.proto";
+import "google/api/field_behavior.proto";
+import "validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "./cmd;serverProto";
+
+option (gnostic.openapi.v3.document) = {
+  info: {
+    title: "patrick-db"
+    version: "1.0"
+    description: "patrick-db server."
+    contact: {
+      name: "patrick koss";
+      url: "https://patrick-koss.com";
+      email: "patrick@no-reply.com";
+    }
+  }
+  servers: [
+    {
+      description: "patrick-db DEV"
+      url: "https://example.com"
+    }
+  ]
+
+  // Defines the error response for envoy
+  components: {
+    schemas: {
+      additional_properties: {
+        name: "ErrorResponse"
+        value: {
+          schema: {
+            type: "object"
+            properties: {
+              additional_properties:{
+                name: "timeStamp"
+                value: {
+                  schema: {
+                    type: "string"
+                    format: "date-time"
+                  }}}
+              additional_properties:{
+                name: "message"
+                value: {
+                  schema: {
+                    type: "string"
+                  }}}}
+            required: "timeStamp"
+            required: "message"
+            example: {
+              yaml: "timeStamp: '2019-08-24T14:15:22Z'\nmessage: Some information about what caused the Error"
+            }}}}}}
+};
+
+message KeyValue {
+  google.protobuf.Any key = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (validate.rules).any = {
+      required: true,
+    }
+  ];
+  google.protobuf.Any value = 2 [
+    (google.api.field_behavior) = REQUIRED,
+    (validate.rules).any = {
+      required: true,
+    }
+  ];
+}
+
+message GetRequest {
+  google.protobuf.Any key = 1 [
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message CreateRequest {
+  KeyValue key_value = 1 [
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message DeleteRequest {
+  google.protobuf.Any key = 1 [
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message UpdateRequest {
+  KeyValue key_value = 1 [
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message GetResponse {
+  KeyValue key_value = 1 [
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message CreateResponse {
+  KeyValue key_value = 1 [
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message DeleteResponse {
+  KeyValue key_value = 1 [
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+message UpdateResponse {
+  KeyValue key_value = 1 [
+    (google.api.field_behavior) = REQUIRED
+  ];
+}
+
+service KeyValueService {
+  rpc Get(GetRequest) returns (GetResponse) {
+    option (google.api.http) = {
+      get: "/v1/keyvalue/{key}"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Get KeyValue for key"
+      description: "Get KeyValue for key"
+      tags: "KeyValue"
+      operation_id: "GetKeyValue"
+      responses: {
+        response_or_reference: {
+          name: "404"
+          value: {
+            response: {
+              description: "Not Found"
+              content: {
+                additional_properties: {
+                  name: "application/json"
+                  value: {
+                    schema: {
+                      reference: {
+                        _ref: "#/components/schemas/ErrorResponse"
+                      }}}}}}}}}
+    };
+  };
+  rpc Create(CreateRequest) returns (CreateResponse) {
+    option (google.api.http) = {
+      post: "/v1/keyvalue"
+      body: "key_value"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Create KeyValue"
+      description: "Create KeyValue"
+      tags: "KeyValue"
+      operation_id: "CreateKeyValue"
+      responses: {
+        response_or_reference: {
+          name: "400"
+          value: {
+            response: {
+              description: "Validation Error"
+              content: {
+                additional_properties: {
+                  name: "application/json"
+                  value: {
+                    schema: {
+                      reference: {
+                        _ref: "#/components/schemas/ErrorResponse"
+                      }}}}}}}}}
+    };
+  };
+  rpc Update(UpdateRequest) returns (UpdateResponse) {
+    option (google.api.http) = {
+      put: "/v1/keyvalue"
+      body: "key_value"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Update KeyValue"
+      description: "Update KeyValue"
+      tags: "KeyValue"
+      operation_id: "UpdateKeyValue"
+      responses: {
+        response_or_reference: {
+          name: "400"
+          value: {
+            response: {
+              description: "Validation Error"
+              content: {
+                additional_properties: {
+                  name: "application/json"
+                  value: {
+                    schema: {
+                      reference: {
+                        _ref: "#/components/schemas/ErrorResponse"
+                      }}}}}}}}
+      response_or_reference: {
+        name: "404"
+        value: {
+          response: {
+            description: "Not Found"
+            content: {
+              additional_properties: {
+                name: "application/json"
+                value: {
+                  schema: {
+                    reference: {
+                      _ref: "#/components/schemas/ErrorResponse"
+                    }}}}}}}}}
+    };
+  };
+  rpc Delete(DeleteRequest) returns (DeleteResponse) {
+    option (google.api.http) = {
+      delete: "/v1/keyvalue/{key}"
+    };
+    option (gnostic.openapi.v3.operation) = {
+      summary: "Delete KeyValue for key"
+      description: "Delete KeyValue for key"
+      tags: "KeyValue"
+      operation_id: "DeleteKeyValue"
+      responses: {
+        response_or_reference: {
+          name: "404"
+          value: {
+            response: {
+              description: "Not Found"
+              content: {
+                additional_properties: {
+                  name: "application/json"
+                  value: {
+                    schema: {
+                      reference: {
+                        _ref: "#/components/schemas/ErrorResponse"
+                      }}}}}}}}}
+    };
+  };
+}

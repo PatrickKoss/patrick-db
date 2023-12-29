@@ -1,0 +1,9 @@
+version: v1
+plugins:
+  - name: openapi
+    out: api
+    opt:
+      - paths=source_relative
+      - output_mode=source_relative
+      - enum_type=string
+      - default_response=false

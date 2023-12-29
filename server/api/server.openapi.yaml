@@ -1,0 +1,192 @@
+# Generated with protoc-gen-openapi
+# https://github.com/google/gnostic/tree/master/cmd/protoc-gen-openapi
+
+openapi: 3.0.3
+info:
+    title: patrick-db
+    description: patrick-db server.
+    contact:
+        name: patrick koss
+        url: https://patrick-koss.com
+        email: patrick@no-reply.com
+    version: "1.0"
+servers:
+    - url: https://example.com
+      description: patrick-db DEV
+paths:
+    /v1/keyvalue:
+        put:
+            tags:
+                - KeyValueService
+                - KeyValue
+            summary: Update KeyValue
+            description: Update KeyValue
+            operationId: UpdateKeyValue
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/KeyValue'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/UpdateResponse'
+                "400":
+                    description: Validation Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "404":
+                    description: Not Found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+        post:
+            tags:
+                - KeyValueService
+                - KeyValue
+            summary: Create KeyValue
+            description: Create KeyValue
+            operationId: CreateKeyValue
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/KeyValue'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/CreateResponse'
+                "400":
+                    description: Validation Error
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+    /v1/keyvalue/{key}:
+        get:
+            tags:
+                - KeyValueService
+                - KeyValue
+            summary: Get KeyValue for key
+            description: Get KeyValue for key
+            operationId: GetKeyValue
+            parameters:
+                - name: key
+                  in: path
+                  required: true
+                  schema:
+                    $ref: '#/components/schemas/GoogleProtobufAny'
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/GetResponse'
+                "404":
+                    description: Not Found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+        delete:
+            tags:
+                - KeyValueService
+                - KeyValue
+            summary: Delete KeyValue for key
+            description: Delete KeyValue for key
+            operationId: DeleteKeyValue
+            parameters:
+                - name: key
+                  in: path
+                  required: true
+                  schema:
+                    $ref: '#/components/schemas/GoogleProtobufAny'
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/DeleteResponse'
+                "404":
+                    description: Not Found
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+components:
+    schemas:
+        CreateResponse:
+            required:
+                - keyValue
+            type: object
+            properties:
+                keyValue:
+                    $ref: '#/components/schemas/KeyValue'
+        DeleteResponse:
+            required:
+                - keyValue
+            type: object
+            properties:
+                keyValue:
+                    $ref: '#/components/schemas/KeyValue'
+        ErrorResponse:
+            example:
+                timeStamp: '2019-08-24T14:15:22Z'
+                message: Some information about what caused the Error
+            required:
+                - timeStamp
+                - message
+            type: object
+            properties:
+                timeStamp:
+                    type: string
+                    format: date-time
+                message:
+                    type: string
+        GetResponse:
+            required:
+                - keyValue
+            type: object
+            properties:
+                keyValue:
+                    $ref: '#/components/schemas/KeyValue'
+        GoogleProtobufAny:
+            type: object
+            properties:
+                '@type':
+                    type: string
+                    description: The type of the serialized message.
+            additionalProperties: true
+            description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message.
+        KeyValue:
+            required:
+                - key
+                - value
+            type: object
+            properties:
+                key:
+                    $ref: '#/components/schemas/GoogleProtobufAny'
+                value:
+                    $ref: '#/components/schemas/GoogleProtobufAny'
+        UpdateResponse:
+            required:
+                - keyValue
+            type: object
+            properties:
+                keyValue:
+                    $ref: '#/components/schemas/KeyValue'
+tags:
+    - name: KeyValueService

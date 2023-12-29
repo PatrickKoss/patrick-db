@@ -15,9 +15,18 @@ pub trait ConfigManager {
     fn get_name(&self) -> String;
 }
 
+pub trait AddressManager {
+    fn get_leader_address(&self) -> Result<String>;
+    fn get_follower_addresses(&self) -> Result<Vec<String>>;
+}
+
 pub struct ZooKeeperConfigManager {
     service_id: String,
     latch: LeaderLatch,
+    instances: Arc<RwLock<Vec<Instance>>>,
+}
+
+pub struct ZooKeeperAddressManager {
     instances: Arc<RwLock<Vec<Instance>>>,
 }
 
@@ -49,6 +58,19 @@ impl ZooKeeperConfigManager {
     }
 }
 
+impl ZooKeeperAddressManager {
+    pub fn new(service_registry_path: &str, zookeeper_urls: &str) -> Result<Self> {
+        let zk_arc = connect_to_zookeeper(zookeeper_urls)?;
+        ensure_parent_node_exists(&zk_arc, service_registry_path)?;
+        let instances = Arc::new(RwLock::new(Vec::<Instance>::new()));
+        watch_service_changes(&zk_arc, service_registry_path, &instances)?;
+
+        Ok(Self {
+            instances,
+        })
+    }
+}
+
 impl ConfigManager for ZooKeeperConfigManager {
     fn is_leader(&self) -> bool {
         self.latch.has_leadership()
@@ -56,30 +78,36 @@ impl ConfigManager for ZooKeeperConfigManager {
 
     fn get_leader_address(&self) -> Result<String> {
         let instances = self.instances.read().unwrap();
-        for instance in instances.iter() {
-            log::info!("instance id: {}, leader id: {}", &instance.id, &self.service_id);
-            if instance.id == self.service_id {
-                return Ok(instance.address.clone());
-            }
-        }
+        let leader_instance = instances.iter().find(|&instance| instance.id == self.service_id);
 
-        Err(anyhow::anyhow!("Leader not found"))
+        match leader_instance {
+            Some(instance) => Ok(instance.address.clone()),
+            None => Err(anyhow::anyhow!("Leader not found")),
+        }
     }
 
     fn get_follower_addresses(&self) -> Result<Vec<String>> {
-        let mut follower_addresses = Vec::<String>::new();
         let instances = self.instances.read().unwrap();
-        for instance in instances.iter() {
-            if instance.id != self.service_id {
-                follower_addresses.push(instance.address.clone());
-            }
-        }
+        let follower_addresses: Vec<String> = instances.iter()
+            .filter(|&instance| instance.id != self.service_id)
+            .map(|instance| instance.address.clone())
+            .collect();
 
         Ok(follower_addresses)
     }
 
     fn get_name(&self) -> String {
         self.service_id.clone()
+    }
+}
+
+impl AddressManager for ZooKeeperAddressManager{
+    fn get_leader_address(&self) -> Result<String> {
+        todo!()
+    }
+
+    fn get_follower_addresses(&self) -> Result<Vec<String>> {
+        todo!()
     }
 }
 
