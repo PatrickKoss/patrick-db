@@ -8,6 +8,7 @@ import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "validate/validate.proto";
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
 
 option go_package = "./cmd;serverProto";
 
@@ -74,7 +75,7 @@ message KeyValue {
 }
 
 message GetRequest {
-  google.protobuf.Any key = 1 [
+  google.protobuf.Value key = 1 [
     (google.api.field_behavior) = REQUIRED
   ];
 }

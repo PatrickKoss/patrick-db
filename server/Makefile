@@ -27,7 +27,10 @@ protoformat: proto/buf.lock bin/protoc-gen-buf-lint ## Format protobuf files
 gen-proto: install-proto-tools proto/buf.lock
 	@buf generate
 
-install-proto-tools: install-buf install-protoc-gen-buf-breaking install-protoc-gen-buf-lint install-protoc-gen-validate install-protoc-gen-openapi
+build-proto: gen-proto ## Build protobuf files
+	@buf build -o $(PROTO_DIR)/server-envoy.pb
+
+install-proto-tools: install-buf install-protoc-gen-buf-breaking install-protoc-gen-buf-lint install-protoc-gen-validate install-protoc-gen-openapi install-protoc-gen-go install-protoc-gen-go-grpc
 
 BUF = bin/buf
 install-buf: $(BUF)
@@ -53,3 +56,13 @@ PROTOC_GEN_OPENAPI = bin/protoc-gen-openapi
 install-protoc-gen-openapi: $(PROTOC_GEN_OPENAPI)
 $(PROTOC_GEN_OPENAPI):
 	GOBIN=$(PWD)/bin go install github.com/google/gnostic/cmd/protoc-gen-openapi@latest
+
+PROTOC_GEN_GO = bin/protoc-gen-go
+install-protoc-gen-go: $(PROTOC_GEN_GO)
+$(PROTOC_GEN_GO):
+	GOBIN=$(PWD)/bin go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+
+PROTOC_GEN_GO_GRPC = bin/protoc-gen-go-grpc
+install-protoc-gen-go-grpc: $(PROTOC_GEN_GO_GRPC)
+$(PROTOC_GEN_GO_GRPC):
+	GOBIN=$(PWD)/bin go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest

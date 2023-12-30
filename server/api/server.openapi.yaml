@@ -86,7 +86,7 @@ paths:
                   in: path
                   required: true
                   schema:
-                    $ref: '#/components/schemas/GoogleProtobufAny'
+                    $ref: '#/components/schemas/GoogleProtobufValue'
             responses:
                 "200":
                     description: OK
@@ -171,6 +171,8 @@ components:
                     description: The type of the serialized message.
             additionalProperties: true
             description: Contains an arbitrary serialized message along with a @type that describes the type of the serialized message.
+        GoogleProtobufValue:
+            description: Represents a dynamically typed value which can be either null, a number, a string, a boolean, a recursive struct value, or a list of values.
         KeyValue:
             required:
                 - key

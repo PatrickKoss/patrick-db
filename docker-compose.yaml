@@ -29,15 +29,17 @@ services:
     environment:
       ZOO_MY_ID: 3
       ZOO_SERVERS: server.1=zoo1:2888:3888;2181 server.2=zoo2:2888:3888;2181 server.3=zoo3:2888:3888;2181
-  zookeeperapp:
-    build: ./zookeeper
-    container_name: "zookeeperapp"
+  server:
+    build: ./server
+    container_name: "server1"
     environment:
       - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
-      # - ZOOKEEPER_SERVERS=test:1234
     volumes:
-      - ./zookeeper:/app
-    command: sh -c "cargo watch -x run"
+      - ./server:/app
+      - ./configmanager:/configmanager
+    ports:
+      - "50051:50051"
+    command: sh -c "cargo watch -x 'run --bin server'"
   zookeeperapp2:
     build: ./zookeeper
     container_name: "zookeeperapp2"
@@ -47,6 +49,15 @@ services:
     volumes:
       - ./zookeeper:/app
     command: sh -c "cargo watch -x run"
+  envoy:
+    image: envoyproxy/envoy:v1.28.0
+    ports:
+      - "10000:10000"
+      - "9901:9901"
+      - "51051:51051"
+    volumes:
+      - ./server/envoy.yaml:/etc/envoy/envoy.yaml
+      - ./server/proto:/proto
 
 volumes:
   zookeeper_data:

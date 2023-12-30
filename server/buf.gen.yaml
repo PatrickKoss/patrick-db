@@ -7,3 +7,9 @@ plugins:
       - output_mode=source_relative
       - enum_type=string
       - default_response=false
+  - plugin: go
+    out: proto
+    opt: paths=source_relative
+  - plugin: go-grpc
+    out: proto
+    opt: paths=source_relative

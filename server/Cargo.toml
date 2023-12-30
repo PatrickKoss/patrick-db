@@ -3,11 +3,11 @@ name = "server"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]] # Bin to run the HelloWorld gRPC server
+[[bin]]
 name = "server"
 path = "src/server.rs"
 
-[[bin]] # Bin to run the HelloWorld gRPC client
+[[bin]]
 name = "client"
 path = "src/client.rs"
 
@@ -16,6 +16,7 @@ tonic = "0.10"
 prost = "0.12"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 prost-types = "0.12.3"
+configmanager = { path = "../configmanager" }
 
 [build-dependencies]
 tonic-buf-build = "0.1.2"

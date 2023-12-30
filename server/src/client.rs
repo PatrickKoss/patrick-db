@@ -1,7 +1,8 @@
-use key_value_store::key_value_service_client::KeyValueServiceClient;
+use prost_types::Value;
+use prost_types::value::Kind;
+
 use key_value_store::GetRequest;
-use prost_types::Any;
-use std::string::String;
+use key_value_store::key_value_service_client::KeyValueServiceClient;
 
 pub mod key_value_store {
     tonic::include_proto!("server");
@@ -11,13 +12,12 @@ pub mod key_value_store {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = KeyValueServiceClient::connect("http://[::1]:50051").await?;
 
-    let key = Any {
-        type_url: "type_url".to_string(),
-        value: String::from("key").into_bytes(),
+    let value = Value {
+        kind: Some(Kind::StringValue("value".to_string())),
     };
 
     let request = tonic::Request::new(GetRequest {
-        key: Some(key),
+        key: value.into(),
     });
 
     let response = client.get(request).await?;
