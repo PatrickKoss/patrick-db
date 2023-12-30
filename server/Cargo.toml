@@ -5,7 +5,7 @@ edition = "2021"
 
 [[bin]]
 name = "server"
-path = "src/server.rs"
+path = "src/main.rs"
 
 [[bin]]
 name = "client"
@@ -17,10 +17,14 @@ prost = "0.12"
 tokio = { version = "1.0", features = ["full"] }
 prost-types = "0.12.3"
 env_logger = "0.10.1"
+clap = { version = "4.4.11", features = ["derive"] }
 log = { version = "0.4.20", features = [] }
 configmanager = { path = "../configmanager" }
 hyper = "0.14.28"
 tower = { version = "0.4.13", features = [] }
+storageengine = { path = "../storageengine" }
+indexengine = { path = "../indexengine" }
+anyhow = "1.0.77"
 
 [build-dependencies]
 tonic-buf-build = "0.1.2"
