@@ -60,13 +60,13 @@ option (gnostic.openapi.v3.document) = {
 };
 
 message KeyValue {
-  google.protobuf.Any key = 1 [
+  google.protobuf.Value key = 1 [
     (google.api.field_behavior) = REQUIRED,
     (validate.rules).any = {
       required: true,
     }
   ];
-  google.protobuf.Any value = 2 [
+  google.protobuf.Value value = 2 [
     (google.api.field_behavior) = REQUIRED,
     (validate.rules).any = {
       required: true,
@@ -87,7 +87,7 @@ message CreateRequest {
 }
 
 message DeleteRequest {
-  google.protobuf.Any key = 1 [
+  google.protobuf.Value key = 1 [
     (google.api.field_behavior) = REQUIRED
   ];
 }

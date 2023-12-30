@@ -25,8 +25,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("RESPONSE={:?}", response);
 
     let key_value = response.into_inner().key_value.unwrap();
-    println!("KEY={:?}", String::from_utf8_lossy(&key_value.key.unwrap().value));
-    println!("VALUE={:?}", String::from_utf8_lossy(&key_value.value.unwrap().value));
+
+    let key = match key_value.key.unwrap().kind {
+        Some(Kind::StringValue(s)) => s,
+        _ => String::from(""),
+    };
+    println!("VALUE={:?}", &key);
+
+    let value = match key_value.value.unwrap().kind {
+        Some(Kind::StringValue(s)) => s,
+        _ => String::from(""),
+    };
+    println!("VALUE={:?}", &value);
 
     Ok(())
 }

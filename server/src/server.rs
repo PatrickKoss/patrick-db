@@ -2,8 +2,9 @@ use tonic::{Request, Response, Status, transport::Server};
 
 use key_value_store::{DeleteRequest, DeleteResponse, GetRequest, GetResponse, KeyValue, CreateRequest, CreateResponse, UpdateRequest, UpdateResponse};
 use key_value_store::key_value_service_server::{KeyValueService, KeyValueServiceServer};
-use prost_types::Any;
+use prost_types::Value;
 use std::string::String;
+use prost_types::value::Kind;
 
 pub mod key_value_store {
     tonic::include_proto!("server");
@@ -16,20 +17,18 @@ pub struct KeyValueStoreImpl {}
 impl KeyValueService for KeyValueStoreImpl {
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
         println!("Got a request: {:?}", request);
-        let key = Any {
-            type_url: "type_url".to_string(),
-            value: String::from("key").into_bytes(),
+        let key = Value {
+            kind: Some(Kind::StringValue("key".to_string())),
         };
 
-        let value = Any {
-            type_url: "type_url".to_string(),
-            value: String::from("value").into_bytes(),
+        let value = Value {
+            kind: Some(Kind::StringValue("value".to_string())),
         };
 
         let reply = GetResponse {
             key_value: Option::from(KeyValue {
-                key: Some(key),
-                value: Some(value),
+                key: key.into(),
+                value: value.into(),
             })
         };
 
@@ -37,7 +36,23 @@ impl KeyValueService for KeyValueStoreImpl {
     }
 
     async fn create(&self, _request: Request<CreateRequest>) -> Result<Response<CreateResponse>, Status> {
-        todo!()
+        println!("Got a request: {:?}", _request);
+        let key = Value {
+            kind: Some(Kind::StringValue("key".to_string())),
+        };
+
+        let value = Value {
+            kind: Some(Kind::StringValue("value".to_string())),
+        };
+
+        let reply = CreateResponse {
+            key_value: Option::from(KeyValue {
+                key: key.into(),
+                value: value.into(),
+            })
+        };
+
+        Ok(Response::new(reply))
     }
 
     async fn update(&self, _request: Request<UpdateRequest>) -> Result<Response<UpdateResponse>, Status> {
