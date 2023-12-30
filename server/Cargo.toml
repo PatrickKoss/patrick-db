@@ -14,9 +14,13 @@ path = "src/client.rs"
 [dependencies]
 tonic = "0.10"
 prost = "0.12"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.0", features = ["full"] }
 prost-types = "0.12.3"
+env_logger = "0.10.1"
+log = { version = "0.4.20", features = [] }
 configmanager = { path = "../configmanager" }
+hyper = "0.14.28"
+tower = { version = "0.4.13", features = [] }
 
 [build-dependencies]
 tonic-buf-build = "0.1.2"
