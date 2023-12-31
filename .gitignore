@@ -13,6 +13,7 @@ Cargo.lock
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
 patrick.db
+patrick2.db
 .idea/
 cli/ss_tables/
 **/ss_tables/

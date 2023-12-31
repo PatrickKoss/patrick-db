@@ -50,7 +50,7 @@ impl ZooKeeperConfigManager {
         let service_id = Uuid::new_v4().to_string();
 
         let latch = setup_leader_latch(&zk_arc, &service_id, leader_election_path)?;
-        setup_leader_watch(zk_arc.clone(), latch.clone(), service_id.as_str(), service_registry_path, instance_address)?;
+        setup_leader_watch(&zk_arc.clone(), &latch.clone(), &service_id, service_registry_path, instance_address)?;
 
         ensure_parent_node_exists(&zk_arc, service_registry_path)?;
         let instances = Arc::new(RwLock::new(Vec::<Instance>::new()));
@@ -150,6 +150,7 @@ fn watch_service_changes(zk_arc: &Arc<ZooKeeper>, service_registry_path: &str, i
 
 fn handle_service_change(zk_arc: &Arc<ZooKeeper>, service_discovery_path: &str, instances: &Arc<RwLock<Vec<Instance>>>) {
     log::info!("new instance added to service discovery");
+
     let service_ids = match zk_arc.get_children(service_discovery_path, false) {
         Ok(ids) => ids,
         Err(e) => {
@@ -157,12 +158,24 @@ fn handle_service_change(zk_arc: &Arc<ZooKeeper>, service_discovery_path: &str, 
             return;
         }
     };
+
+    // clear instances
+    let mut instances_mut = instances.write().unwrap();
+    instances_mut.clear();
+
     for service_id in service_ids {
-        handle_instance_id(zk_arc, service_discovery_path, &service_id, instances);
+        handle_instance_id(zk_arc, service_discovery_path, &service_id, &mut instances_mut);
+    }
+
+    drop(instances_mut);
+
+    // Reset the watch
+    if let Err(e) = watch_service_changes(zk_arc, service_discovery_path, instances) {
+        log::error!("Error resetting watch for service path {}: {:?}", service_discovery_path, e);
     }
 }
 
-fn handle_instance_id(zk_arc: &Arc<ZooKeeper>, service_discovery_path: &str, instance_id: &str, instances: &Arc<RwLock<Vec<Instance>>>) {
+fn handle_instance_id(zk_arc: &Arc<ZooKeeper>, service_discovery_path: &str, instance_id: &str, instances: &mut Vec<Instance>) {
     let service_path = format!("{}/{}", &service_discovery_path, instance_id);
 
     match zk_arc.get_data(&service_path, false) {
@@ -174,8 +187,9 @@ fn handle_instance_id(zk_arc: &Arc<ZooKeeper>, service_discovery_path: &str, ins
                     return;
                 }
             };
-            instances.write().unwrap().push(instance);
+            instances.push(instance);
             log::info!("Discovered instance: {}", instance_id);
+            log::info!("Discoverd Instances: {:?}", instances);
         }
         Err(e) => log::error!("Error getting data for service {}: {:?}", instance_id, e),
     }
@@ -221,32 +235,51 @@ fn setup_leader_latch(zk_arc: &Arc<ZooKeeper>, service_id: &str, leader_election
 }
 
 fn setup_leader_watch(
-    zk_arc: Arc<ZooKeeper>,
-    leader_latch: LeaderLatch,
+    zk_arc: &Arc<ZooKeeper>,
+    leader_latch: &LeaderLatch,
     service_id: &str,
     service_registry_path: &str,
     instance_address: &str,
 ) -> Result<()> {
-    let leader_latch_copy = leader_latch.clone();
-    let service_registry_path_copy = service_registry_path.to_owned();
-    let zk_arc_copy = Arc::clone(&zk_arc);
-    let service_id_copy = service_id.to_owned();
-    let instance_address_copy = instance_address.to_owned();
-    zk_arc.get_children_w(&service_registry_path, move |_| {
-        let service_registry_path = service_registry_path_copy.as_str();
-        let service_id = service_id_copy.as_str();
-        let instance_address = instance_address_copy.as_str();
-        match ensure_parent_node_exists(&zk_arc_copy, service_registry_path) {
-            Ok(_) => log::info!("service registry path exists"),
-            Err(e) => log::error!("error ensuring service registry path exists: {:?}", e),
-        }
+    let zk_arc_clone = Arc::clone(zk_arc);
+    let leader_latch_clone = leader_latch.clone();
+    let service_path = service_registry_path.to_owned();
+    let service_id_owned = service_id.to_owned();
+    let instance_address_owned = instance_address.to_owned();
 
-        match update_service(&zk_arc_copy, service_id, service_registry_path, instance_address, leader_latch_copy.has_leadership()) {
-            Ok(_) => log::info!("service updated"),
-            Err(e) => log::error!("error updating service: {:?}", e),
-        }
+    zk_arc.get_children_w(service_registry_path, move |_| {
+        handle_leader_change(&zk_arc_clone, &service_path, &leader_latch_clone, &service_id_owned, &instance_address_owned)
     })?;
+
     Ok(())
+}
+
+fn handle_leader_change(
+    zk_arc: &Arc<ZooKeeper>,
+    service_discovery_path: &str,
+    leader_latch: &LeaderLatch,
+    service_id: &str,
+    instance_address: &str,
+) {
+    log::info!("leader changed. Current service {}, is_leader: {}", service_id, leader_latch.has_leadership());
+
+    match ensure_parent_node_exists(zk_arc, service_discovery_path) {
+        Ok(_) => log::info!("service registry path exists"),
+        Err(e) => {
+            log::error!("error ensuring service registry path exists: {:?}", e);
+            return;
+        }
+    }
+
+    match update_service(zk_arc, service_id, service_discovery_path, instance_address, leader_latch.has_leadership()) {
+        Ok(_) => log::info!("service updated"),
+        Err(e) => log::error!("error updating service: {:?}", e),
+    }
+
+    // Reset the watch
+    if let Err(e) = setup_leader_watch(zk_arc, leader_latch, service_id, service_discovery_path, instance_address) {
+        log::error!("Error resetting watch for service path {}: {:?}", service_discovery_path, e);
+    }
 }
 
 fn get_leader_address(instances: RwLockReadGuard<Vec<Instance>>) -> Result<String> {

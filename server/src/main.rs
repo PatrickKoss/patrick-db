@@ -5,11 +5,12 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use tonic::transport::Server;
+use configmanager::ConfigManager;
 
 use indexengine::index::Index;
 use indexengine::no_index::NoIndex;
 
-use crate::server::key_value_store::key_value_service_server::KeyValueServiceServer;
+use crate::server::key_value_store::key_value_service_server::{KeyValueService, KeyValueServiceServer};
 
 mod logging_middleware;
 mod server;
@@ -73,6 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_url.as_str(),
         zookeeper_servers.as_str(),
     )?;
+    log::info!("follower addresses: {:?}", config_manager.get_follower_addresses()?);
+    log::info!("leader address: {:?}", config_manager.get_leader_address()?);
     log::info!("finished starting zookeeper config manager");
 
     log::info!("init storage engine");
@@ -89,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // let addr = "0.0.0.0:50051".parse()?;
     let addr = server_address.parse()?;
-    let server = server::KeyValueStoreImpl::new(index_engine, Box::new(config_manager));
+    let server = server::KeyValueStoreImpl::new(index_engine, Box::new(config_manager)).await;
 
     let layer = tower::ServiceBuilder::new()
         // Apply middleware from tower

@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use prost::Message;
 use prost_types::Value;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 
@@ -8,22 +10,108 @@ use indexengine::index::Index;
 use key_value_store::{CreateRequest, CreateResponse, DeleteRequest, DeleteResponse, GetRequest, GetResponse, KeyValue, UpdateRequest, UpdateResponse};
 use key_value_store::key_value_service_server::KeyValueService;
 
+use crate::server::key_value_store::key_value_service_client::KeyValueServiceClient;
+
 pub mod key_value_store {
     tonic::include_proto!("server");
 }
 
 pub struct KeyValueStoreImpl {
     index_engine: Mutex<Box<dyn Index<Vec<u8>, Vec<u8>>>>,
-    config_manager: Mutex<Box<dyn ConfigManager>>,
+    config_manager: Arc<Mutex<Box<dyn ConfigManager>>>,
+    tx: Sender<Replication>,
+}
+
+#[derive(Clone, Debug)]
+enum Action {
+    Add,
+    Update,
+    Delete,
+}
+
+#[derive(Clone, Debug)]
+struct Replication {
+    action: Action,
+    key_value: KeyValue,
 }
 
 impl KeyValueStoreImpl {
-    pub fn new(index_engine: Box<dyn Index<Vec<u8>, Vec<u8>>>, config_manager: Box<dyn ConfigManager>) -> Self {
+    pub async fn new(index_engine: Box<dyn Index<Vec<u8>, Vec<u8>>>, config_manager: Box<dyn ConfigManager>) -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Replication>(1000);
+        let config_manager = Arc::new(Mutex::new(config_manager));
+        start_replicator(rx, config_manager.clone()).await;
+
         Self {
             index_engine: Mutex::new(index_engine),
-            config_manager: Mutex::new(config_manager),
+            config_manager,
+            tx,
         }
     }
+}
+
+async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mutex<Box<dyn ConfigManager>>>) {
+    let config_manager = config_manager.clone();
+    tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            log::info!("Got replication message: {:?}", message);
+            let follower_addresses = match config_manager.lock().await.get_follower_addresses() {
+                Ok(follower_addresses) => follower_addresses,
+                Err(e) => {
+                    log::error!("Failed to get follower addresses: {:?}", e);
+                    continue;
+                }
+            };
+            log::info!("attempt to replicate to followers: {:?}", follower_addresses);
+
+            for follower_address in follower_addresses {
+                let message = message.clone();
+                let mut client = match KeyValueServiceClient::connect(follower_address).await {
+                    Ok(client) => client,
+                    Err(e) => {
+                        log::error!("Failed to connect to follower: {:?}", e);
+                        continue;
+                    }
+                };
+                match message.action {
+                    Action::Add => {
+                        let request = Request::new(CreateRequest {
+                            key_value: Some(message.key_value),
+                        });
+                        match client.create(request).await {
+                            Ok(_) => {
+                                log::info!("Successfully replicated create to follower");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to replicate create to follower: {:?}", e);
+                            }
+                        }
+                    }
+                    Action::Update => {
+                        let request = Request::new(UpdateRequest {
+                            key_value: Some(message.key_value),
+                        });
+                        match client.update(request).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                log::error!("Failed to replicate update to follower: {:?}", e);
+                            }
+                        }
+                    }
+                    Action::Delete => {
+                        let request = Request::new(DeleteRequest {
+                            key: message.key_value.key,
+                        });
+                        match client.delete(request).await {
+                            Ok(_) => {}
+                            Err(e) => {
+                                log::error!("Failed to replicate delete to follower: {:?}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
 #[tonic::async_trait]
@@ -40,8 +128,8 @@ impl KeyValueService for KeyValueStoreImpl {
         let document = match index_engine.search(&key_bytes) {
             Ok(document) => document,
             Err(e) => {
-                if let Some(index_error) = e.downcast_ref::<indexengine::index::IndexError>() {
-                    return match index_error {
+                return if let Some(index_error) = e.downcast_ref::<indexengine::index::IndexError>() {
+                    match index_error {
                         indexengine::index::IndexError::NotFound => {
                             Err(Status::not_found("key not found"))
                         }
@@ -50,8 +138,8 @@ impl KeyValueService for KeyValueStoreImpl {
                         }
                     }
                 } else {
-                    return Err(Status::internal(e.to_string()));
-                }
+                    Err(Status::internal(e.to_string()))
+                };
             }
         };
 
@@ -92,6 +180,11 @@ impl KeyValueService for KeyValueStoreImpl {
             None => return Err(Status::invalid_argument("key_value must be set")),
         };
 
+        let replication = Replication {
+            action: Action::Add,
+            key_value: key_value.clone(),
+        };
+
         let key_val = match key_value.key {
             Some(key_val) => key_val,
             None => return Err(Status::invalid_argument("key must be set")),
@@ -111,8 +204,8 @@ impl KeyValueService for KeyValueStoreImpl {
         }) {
             Ok(_) => {}
             Err(e) => {
-                if let Some(index_error) = e.downcast_ref::<indexengine::index::IndexError>() {
-                    return match index_error {
+                return if let Some(index_error) = e.downcast_ref::<indexengine::index::IndexError>() {
+                    match index_error {
                         indexengine::index::IndexError::AlreadyExists => {
                             Err(Status::already_exists("document already exists"))
                         }
@@ -121,10 +214,19 @@ impl KeyValueService for KeyValueStoreImpl {
                         }
                     }
                 } else {
-                    return Err(Status::internal(e.to_string()));
-                }
+                    Err(Status::internal(e.to_string()))
+                };
             }
         };
+
+        match self.tx.send(replication).await {
+            Ok(_) => {
+                log::info!("Successfully sent replication message");
+            }
+            Err(e) => {
+                log::error!("Failed to send replication message: {:?}", e);
+            }
+        }
 
         let reply = CreateResponse {
             key_value: Option::from(KeyValue {
