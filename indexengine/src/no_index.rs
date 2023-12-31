@@ -18,7 +18,7 @@ impl NoIndex {
     }
 }
 
-impl<K, V> Index<K, V> for NoIndex where K: Serialize + DeserializeOwned + Hash + Eq, V: Serialize + DeserializeOwned {
+impl<K, V> Index<K, V> for NoIndex where K: Serialize + DeserializeOwned + Hash + Eq + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     fn insert(&mut self, document: Document<K, V>) -> Result<()> {
         let data = bincode::serialize(&document)?;
         self.db_operations.insert(data, self.transaction_id)?;

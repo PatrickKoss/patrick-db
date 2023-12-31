@@ -17,7 +17,7 @@ pub struct BTree<K, V> {
     phatom: PhantomData<(K, V)>,
 }
 
-impl<K, V> BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord, V: Serialize + DeserializeOwned {
+impl<K, V> BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned {
     pub fn new(mut db_operations: Box<dyn DbOperations>) -> Result<Self> {
         let mut map = BTreeMap::new();
         let mut offset = 0;
@@ -50,7 +50,7 @@ impl<K, V> BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::
     }
 }
 
-impl<K, V> Index<K, V> for BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord, V: Serialize + DeserializeOwned {
+impl<K, V> Index<K, V> for BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     fn insert(&mut self, document: Document<K, V>) -> Result<()> {
         let data = bincode::serialize(&document)?;
         let offset_size = self.db_operations.insert(data, self.transaction_id)?;
@@ -283,7 +283,7 @@ mod tests {
     }
 
     fn setup_btree<K, V>(mock_db_operations_impl: MockDbOperationsImpl) -> Result<BTree<K, V>>
-        where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord, V: Serialize + DeserializeOwned
+        where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync
     {
         let db_operations = Box::new(mock_db_operations_impl);
         BTree::new(db_operations)

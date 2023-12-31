@@ -4,7 +4,7 @@ use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 
 use anyhow::Result;
 
-pub trait FileHandler {
+pub trait FileHandler: Send + Sync {
     fn append(&mut self, data: &[u8]) -> Result<u64>;
     fn read(&mut self, offset: u64, size: u64) -> Result<Vec<u8>>;
     fn read_all(&mut self) -> Result<Vec<u8>>;

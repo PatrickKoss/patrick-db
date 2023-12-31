@@ -15,7 +15,7 @@ pub enum IndexError {
     AlreadyExists,
 }
 
-pub trait Index<K, V> {
+pub trait Index<K, V>: Send + Sync {
     fn insert(&mut self, document: Document<K, V>) -> Result<()>;
     fn search(&mut self, id: &K) -> Result<Document<K, V>>;
     fn delete(&mut self, id: &K) -> Result<()>;

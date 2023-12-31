@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zookeeper::{Acl, CreateMode, recipes::leader::LeaderLatch, WatchedEvent, Watcher, ZooKeeper};
 
-pub trait ConfigManager {
+pub trait ConfigManager: Send + Send {
     fn is_leader(&self) -> bool;
     fn get_leader_address(&self) -> Result<String>;
     fn get_follower_addresses(&self) -> Result<Vec<String>>;

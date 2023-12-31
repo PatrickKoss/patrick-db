@@ -17,7 +17,7 @@ pub struct HashMapIndex<K, V> {
     phatom: PhantomData<(K, V)>,
 }
 
-impl<K, V> HashMapIndex<K, V> where K: Serialize + DeserializeOwned + Hash + Eq, V: Serialize + DeserializeOwned {
+impl<K, V> HashMapIndex<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     pub fn new(mut db_operations: Box<dyn DbOperations>) -> Result<Self> {
         let mut map = HashMap::new();
         let mut offset = 0;
@@ -50,7 +50,7 @@ impl<K, V> HashMapIndex<K, V> where K: Serialize + DeserializeOwned + Hash + Eq,
     }
 }
 
-impl<K, V> Index<K, V> for HashMapIndex<K, V> where K: Serialize + DeserializeOwned + Hash + Eq, V: Serialize + DeserializeOwned {
+impl<K, V> Index<K, V> for HashMapIndex<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     fn insert(&mut self, document: Document<K, V>) -> Result<()> {
         let data = bincode::serialize(&document)?;
         let offset_size = self.db_operations.insert(data, self.transaction_id)?;
@@ -282,7 +282,7 @@ mod tests {
         Ok(())
     }
 
-    fn setup_hashmap<K, V>(mock_db_operations_impl: MockDbOperationsImpl) -> Result<HashMapIndex<K, V>> where K: Serialize + DeserializeOwned + Hash + Eq, V: Serialize + DeserializeOwned {
+    fn setup_hashmap<K, V>(mock_db_operations_impl: MockDbOperationsImpl) -> Result<HashMapIndex<K, V>> where K: Serialize + DeserializeOwned + Hash + Eq + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
         let db_operations = Box::new(mock_db_operations_impl);
         HashMapIndex::new(db_operations)
     }

@@ -34,7 +34,7 @@ pub struct OffsetSize {
     pub size: u64,
 }
 
-pub trait DbOperations {
+pub trait DbOperations: Send + Sync {
     fn insert(&mut self, data: Vec<u8>, transaction_id: u64) -> Result<OffsetSize>;
     fn read_with_offset(&mut self, offset_size: &OffsetSize) -> Result<Row>;
     fn read_all(&mut self) -> Result<Vec<Row>>;

@@ -33,7 +33,7 @@ pub struct LsmMapLeaf {
     is_deleted: bool,
 }
 
-impl<K, V> LsmTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::convert::AsRef<[u8]> + Clone + std::cmp::Ord, V: Serialize + DeserializeOwned {
+impl<K, V> LsmTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::convert::AsRef<[u8]> + Clone + std::cmp::Ord + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     pub fn new(db_operations: Box<dyn DbOperations>, ss_table_path: String, tree_size: usize, bloom_filter_size: usize) -> Result<Self> {
         let mut lsm_tree = Self::initialize_lsm_tree(db_operations, ss_table_path, tree_size, bloom_filter_size)?;
         lsm_tree.remove_all_files_from_ss_table()?;
@@ -228,7 +228,7 @@ impl<K, V> LsmTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std
     }
 }
 
-impl<K, V> Index<K, V> for LsmTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::convert::AsRef<[u8]> + Clone + std::cmp::Ord, V: Serialize + DeserializeOwned {
+impl<K, V> Index<K, V> for LsmTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::convert::AsRef<[u8]> + Clone + std::cmp::Ord + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     fn insert(&mut self, document: Document<K, V>) -> Result<()> {
         // check if item is already present
         if self.search(&document.id).is_ok() {
@@ -582,7 +582,7 @@ mod tests {
     }
 
     fn setup_lsm_tree<K, V>(mock_db_operations_impl: MockDbOperationsImpl) -> Result<LsmTree<K, V>>
-        where K: Serialize + DeserializeOwned + Hash + Eq + std::convert::AsRef<[u8]> + Clone + std::cmp::Ord, V: Serialize + DeserializeOwned
+        where K: Serialize + DeserializeOwned + Hash + Eq + std::convert::AsRef<[u8]> + Clone + std::cmp::Ord + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync
     {
         let dir = tempdir()?;
         let path = dir.path().to_path_buf();

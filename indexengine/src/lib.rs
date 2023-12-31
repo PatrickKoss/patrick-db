@@ -19,7 +19,7 @@ pub enum IndexEngine {
 }
 
 pub fn new_index_engine<K, V>(index_engine: IndexEngine, db_operations: Box<dyn storageengine::operations::DbOperations>) -> Result<Box<dyn index::Index<K, V>>>
-    where K: Serialize + DeserializeOwned + Hash + Eq + std::convert::AsRef<[u8]> + Clone + std::cmp::Ord + 'static, V: Serialize + DeserializeOwned + 'static
+    where K: Serialize + DeserializeOwned + Hash + Eq + std::convert::AsRef<[u8]> + Clone + std::cmp::Ord + 'static + Send + Sync, V: Serialize + DeserializeOwned + 'static + Send + Sync
 {
     match index_engine {
         IndexEngine::BTree => {

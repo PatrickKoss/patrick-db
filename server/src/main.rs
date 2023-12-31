@@ -5,8 +5,6 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use tonic::transport::Server;
-use configmanager::ConfigManager;
-
 
 use indexengine::index::Index;
 use indexengine::no_index::NoIndex;
@@ -69,27 +67,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let service_registry_path = env::var("SERVICE_REGISTRY_PATH").ok().unwrap_or(args.service_registry_path);
 
     log::info!("start zookeeper config manager");
-    let _config_manager = configmanager::ZooKeeperConfigManager::new(
+    let config_manager = configmanager::ZooKeeperConfigManager::new(
         service_registry_path.as_str(),
         leader_election_path.as_str(),
         server_url.as_str(),
         zookeeper_servers.as_str(),
     )?;
-    let is_leader = _config_manager.is_leader();
-    let name = _config_manager.get_name();
-    let leader_address = _config_manager.get_leader_address()?;
-    let follower_addresses = _config_manager.get_follower_addresses()?;
-    log::info!("is leader: {}", is_leader);
-    log::info!("name: {}", name);
-    log::info!("leader address: {}", leader_address);
-    log::info!("follower addresses: {:?}", follower_addresses);
     log::info!("finished starting zookeeper config manager");
 
     log::info!("init storage engine");
     let storage_file_name = env::var("STORAGE_FILE_NAME").ok().unwrap_or(args.storage_file_name);
     let file_handler = storageengine::file_handler::FileHandlerImpl::new(&storage_file_name)?;
     let operations = storageengine::operations::DbOperationsImpl::new(Box::new(file_handler));
-    let _index_engine: Box<dyn Index<Vec<u8>, Vec<u8>>> = match args.index_engine {
+    let index_engine: Box<dyn Index<Vec<u8>, Vec<u8>>> = match args.index_engine {
         IndexEngine::BTree => indexengine::new_index_engine(indexengine::IndexEngine::BTree, Box::new(operations)).expect("failed to create btree"),
         IndexEngine::LSMTree => indexengine::new_index_engine(indexengine::IndexEngine::LSM, Box::new(operations)).expect("failed to create lsm"),
         IndexEngine::NoIndex => Box::new(NoIndex::new(Box::new(operations))),
@@ -99,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // let addr = "0.0.0.0:50051".parse()?;
     let addr = server_address.parse()?;
-    let server = server::KeyValueStoreImpl::default();
+    let server = server::KeyValueStoreImpl::new(index_engine, Box::new(config_manager));
 
     let layer = tower::ServiceBuilder::new()
         // Apply middleware from tower
