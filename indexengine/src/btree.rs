@@ -52,6 +52,10 @@ impl<K, V> BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::
 
 impl<K, V> Index<K, V> for BTree<K, V> where K: Serialize + DeserializeOwned + Hash + Eq + std::cmp::Ord + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     fn insert(&mut self, document: Document<K, V>) -> Result<()> {
+        if self.search(&document.id).is_ok() {
+            return Err(IndexError::AlreadyExists.into());
+        }
+
         let data = bincode::serialize(&document)?;
         let offset_size = self.db_operations.insert(data, self.transaction_id)?;
         self.map.insert(document.id, offset_size);

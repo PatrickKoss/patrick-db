@@ -34,9 +34,14 @@ services:
     container_name: "server1"
     environment:
       - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
+      - SERVER_ADDRESS=0.0.0.0:50051
+      - SERVER_URL=http://0.0.0.0:50051
     volumes:
       - ./server:/app
       - ./configmanager:/configmanager
+      - ./bloomfilter:/bloomfilter
+      - ./indexengine:/indexengine
+      - ./storageengine:/storageengine
     ports:
       - "50051:50051"
     command: sh -c "cargo watch -x 'run --bin server'"

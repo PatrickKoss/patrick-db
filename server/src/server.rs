@@ -41,12 +41,12 @@ impl KeyValueService for KeyValueStoreImpl {
             Ok(document) => document,
             Err(e) => {
                 if let Some(index_error) = e.downcast_ref::<indexengine::index::IndexError>() {
-                    match index_error {
+                    return match index_error {
                         indexengine::index::IndexError::NotFound => {
-                            return Err(Status::not_found("key not found"));
+                            Err(Status::not_found("key not found"))
                         }
                         _ => {
-                            return Err(Status::internal(e.to_string()));
+                            Err(Status::internal(e.to_string()))
                         }
                     }
                 } else {
@@ -54,6 +54,7 @@ impl KeyValueService for KeyValueStoreImpl {
                 }
             }
         };
+
         let bytes = prost::bytes::Bytes::from(document.id);
         let key = match Value::decode(bytes) {
             Ok(key) => key,
@@ -101,7 +102,7 @@ impl KeyValueService for KeyValueStoreImpl {
             Some(value_val) => value_val,
             None => return Err(Status::invalid_argument("value must be set")),
         };
-        let value_bytes = key_val.encode_to_vec();
+        let value_bytes = value_val.encode_to_vec();
 
         let mut index_engine = self.index_engine.lock().await;
         match index_engine.insert(indexengine::index::Document {
@@ -110,7 +111,18 @@ impl KeyValueService for KeyValueStoreImpl {
         }) {
             Ok(_) => {}
             Err(e) => {
-                return Err(Status::internal(e.to_string()));
+                if let Some(index_error) = e.downcast_ref::<indexengine::index::IndexError>() {
+                    return match index_error {
+                        indexengine::index::IndexError::AlreadyExists => {
+                            Err(Status::already_exists("document already exists"))
+                        }
+                        _ => {
+                            Err(Status::internal(e.to_string()))
+                        }
+                    }
+                } else {
+                    return Err(Status::internal(e.to_string()));
+                }
             }
         };
 

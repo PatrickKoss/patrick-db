@@ -20,6 +20,10 @@ impl NoIndex {
 
 impl<K, V> Index<K, V> for NoIndex where K: Serialize + DeserializeOwned + Hash + Eq + std::marker::Send + std::marker::Sync, V: Serialize + DeserializeOwned + std::marker::Send + std::marker::Sync {
     fn insert(&mut self, document: Document<K, V>) -> Result<()> {
+        if <NoIndex as Index<K, V>>::search(self, &document.id).is_ok() {
+            return Err(IndexError::AlreadyExists.into());
+        }
+
         let data = bincode::serialize(&document)?;
         self.db_operations.insert(data, self.transaction_id)?;
         self.transaction_id += 1;
