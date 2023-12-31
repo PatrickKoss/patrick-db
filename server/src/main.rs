@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use tonic::transport::Server;
+use configmanager::ConfigManager;
 
 
 use indexengine::index::Index;
@@ -73,7 +74,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         leader_election_path.as_str(),
         server_url.as_str(),
         zookeeper_servers.as_str(),
-    );
+    )?;
+    let is_leader = _config_manager.is_leader();
+    let name = _config_manager.get_name();
+    let leader_address = _config_manager.get_leader_address()?;
+    let follower_addresses = _config_manager.get_follower_addresses()?;
+    log::info!("is leader: {}", is_leader);
+    log::info!("name: {}", name);
+    log::info!("leader address: {}", leader_address);
+    log::info!("follower addresses: {:?}", follower_addresses);
     log::info!("finished starting zookeeper config manager");
 
     log::info!("init storage engine");

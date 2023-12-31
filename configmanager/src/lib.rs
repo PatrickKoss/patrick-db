@@ -2,9 +2,10 @@ extern crate uuid;
 extern crate zookeeper;
 
 use std::{sync::Arc, time::Duration};
-use std::sync::RwLock;
+use std::sync::{RwLock, RwLockReadGuard};
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zookeeper::{Acl, CreateMode, recipes::leader::LeaderLatch, WatchedEvent, Watcher, ZooKeeper};
 
@@ -30,9 +31,11 @@ pub struct ZooKeeperAddressManager {
     instances: Arc<RwLock<Vec<Instance>>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Instance {
     pub id: String,
     pub address: String,
+    pub is_leader: bool,
 }
 
 struct NoopWatcher;
@@ -44,11 +47,17 @@ impl Watcher for NoopWatcher {
 impl ZooKeeperConfigManager {
     pub fn new(service_registry_path: &str, leader_election_path: &str, instance_address: &str, zookeeper_urls: &str) -> Result<Self> {
         let zk_arc = connect_to_zookeeper(zookeeper_urls)?;
+        let service_id = Uuid::new_v4().to_string();
+
+        let latch = setup_leader_latch(&zk_arc, &service_id, leader_election_path)?;
+        setup_leader_watch(zk_arc.clone(), latch.clone(), service_id.as_str(), service_registry_path, instance_address)?;
+
         ensure_parent_node_exists(&zk_arc, service_registry_path)?;
         let instances = Arc::new(RwLock::new(Vec::<Instance>::new()));
         watch_service_changes(&zk_arc, service_registry_path, &instances)?;
-        let service_id = register_service(&zk_arc, service_registry_path, instance_address)?;
-        let latch = setup_leader_latch(&zk_arc, &service_id, leader_election_path)?;
+        register_service(&zk_arc, service_id.as_str(), service_registry_path, instance_address, latch.has_leadership())?;
+        // trick to init leader and followers, later will be updated by watches
+        handle_service_change(&zk_arc, service_registry_path, &instances);
 
         Ok(Self {
             service_id,
@@ -64,6 +73,7 @@ impl ZooKeeperAddressManager {
         ensure_parent_node_exists(&zk_arc, service_registry_path)?;
         let instances = Arc::new(RwLock::new(Vec::<Instance>::new()));
         watch_service_changes(&zk_arc, service_registry_path, &instances)?;
+        handle_service_change(&zk_arc, service_registry_path, &instances);
 
         Ok(Self {
             instances,
@@ -78,22 +88,14 @@ impl ConfigManager for ZooKeeperConfigManager {
 
     fn get_leader_address(&self) -> Result<String> {
         let instances = self.instances.read().unwrap();
-        let leader_instance = instances.iter().find(|&instance| instance.id == self.service_id);
 
-        match leader_instance {
-            Some(instance) => Ok(instance.address.clone()),
-            None => Err(anyhow::anyhow!("Leader not found")),
-        }
+        get_leader_address(instances)
     }
 
     fn get_follower_addresses(&self) -> Result<Vec<String>> {
         let instances = self.instances.read().unwrap();
-        let follower_addresses: Vec<String> = instances.iter()
-            .filter(|&instance| instance.id != self.service_id)
-            .map(|instance| instance.address.clone())
-            .collect();
 
-        Ok(follower_addresses)
+        get_follower_addresses(instances)
     }
 
     fn get_name(&self) -> String {
@@ -101,13 +103,17 @@ impl ConfigManager for ZooKeeperConfigManager {
     }
 }
 
-impl AddressManager for ZooKeeperAddressManager{
+impl AddressManager for ZooKeeperAddressManager {
     fn get_leader_address(&self) -> Result<String> {
-        todo!()
+        let instances = self.instances.read().unwrap();
+
+        get_leader_address(instances)
     }
 
     fn get_follower_addresses(&self) -> Result<Vec<String>> {
-        todo!()
+        let instances = self.instances.read().unwrap();
+
+        get_follower_addresses(instances)
     }
 }
 
@@ -161,24 +167,50 @@ fn handle_instance_id(zk_arc: &Arc<ZooKeeper>, service_discovery_path: &str, ins
 
     match zk_arc.get_data(&service_path, false) {
         Ok((data, _)) => {
-            let instance_address = String::from_utf8_lossy(&data);
-            instances.write().unwrap().push(Instance {
-                id: instance_id.parse().unwrap(),
-                address: instance_address.to_string(),
-            });
-            log::info!("Discovered instance: {}, Address: {}", instance_id, instance_address);
+            let instance: Instance = match bincode::deserialize(&data) {
+                Ok(instance) => instance,
+                Err(e) => {
+                    log::error!("Error deserializing instance data for service {}: {:?}", instance_id, e);
+                    return;
+                }
+            };
+            instances.write().unwrap().push(instance);
+            log::info!("Discovered instance: {}", instance_id);
         }
         Err(e) => log::error!("Error getting data for service {}: {:?}", instance_id, e),
     }
 }
 
-fn register_service(zk_arc: &Arc<ZooKeeper>, service_registry_path: &str, instance_address: &str) -> Result<String> {
-    let service_id = Uuid::new_v4().to_string();
+fn register_service(zk_arc: &Arc<ZooKeeper>, service_id: &str, service_registry_path: &str, instance_address: &str, is_leader: bool) -> Result<()> {
     let service_path = format!("{}/{}", service_registry_path, service_id);
-    zk_arc.create(&service_path, Vec::from(instance_address), Acl::open_unsafe().clone(), CreateMode::Ephemeral)?;
+
+    let instance = Instance {
+        id: service_id.to_owned(),
+        is_leader: is_leader,
+        address: instance_address.to_string(),
+    };
+    let buf = bincode::serialize(&instance)?;
+    zk_arc.create(&service_path, buf, Acl::open_unsafe().clone(), CreateMode::Ephemeral)?;
+
     log::info!("Service registered with ID: {}", service_id);
 
-    Ok(service_id)
+    Ok(())
+}
+
+fn update_service(zk_arc: &Arc<ZooKeeper>, service_id: &str, service_registry_path: &str, instance_address: &str, is_leader: bool) -> Result<()> {
+    let service_path = format!("{}/{}", service_registry_path, service_id);
+
+    let instance = Instance {
+        id: service_id.to_owned(),
+        is_leader: is_leader,
+        address: instance_address.to_string(),
+    };
+    let buf = bincode::serialize(&instance)?;
+    zk_arc.set_data(&service_path, buf, None)?;
+
+    log::info!("Service updated with ID: {}", service_id);
+
+    Ok(())
 }
 
 fn setup_leader_latch(zk_arc: &Arc<ZooKeeper>, service_id: &str, leader_election_path: &str) -> Result<LeaderLatch> {
@@ -186,4 +218,59 @@ fn setup_leader_latch(zk_arc: &Arc<ZooKeeper>, service_id: &str, leader_election
     latch.start()?;
 
     Ok(latch)
+}
+
+fn setup_leader_watch(
+    zk_arc: Arc<ZooKeeper>,
+    leader_latch: LeaderLatch,
+    service_id: &str,
+    service_registry_path: &str,
+    instance_address: &str,
+) -> Result<()> {
+    let leader_latch_copy = leader_latch.clone();
+    let service_registry_path_copy = service_registry_path.to_owned();
+    let zk_arc_copy = Arc::clone(&zk_arc);
+    let service_id_copy = service_id.to_owned();
+    let instance_address_copy = instance_address.to_owned();
+    zk_arc.get_children_w(&service_registry_path, move |_| {
+        let service_registry_path = service_registry_path_copy.as_str();
+        let service_id = service_id_copy.as_str();
+        let instance_address = instance_address_copy.as_str();
+        match ensure_parent_node_exists(&zk_arc_copy, service_registry_path) {
+            Ok(_) => log::info!("service registry path exists"),
+            Err(e) => log::error!("error ensuring service registry path exists: {:?}", e),
+        }
+
+        match update_service(&zk_arc_copy, service_id, service_registry_path, instance_address, leader_latch_copy.has_leadership()) {
+            Ok(_) => log::info!("service updated"),
+            Err(e) => log::error!("error updating service: {:?}", e),
+        }
+    })?;
+    Ok(())
+}
+
+fn get_leader_address(instances: RwLockReadGuard<Vec<Instance>>) -> Result<String> {
+    let leader_instance = instances.iter().find(|&instance| instance.is_leader);
+
+    match leader_instance {
+        Some(instance) => Ok(instance.address.clone()),
+        None => Err(anyhow::anyhow!("Leader not found")),
+    }
+}
+
+fn get_follower_addresses(instances: RwLockReadGuard<Vec<Instance>>) -> Result<Vec<String>> {
+    let follower_addresses: Vec<String> = instances.iter()
+        .filter(|&instance| !instance.is_leader)
+        .map(|instance| instance.address.clone())
+        .collect();
+
+    // filter duplicates
+    let follower_addresses: Vec<String> = follower_addresses.into_iter().fold(Vec::new(), |mut acc, x| {
+        if !acc.contains(&x) {
+            acc.push(x);
+        }
+        acc
+    });
+
+    Ok(follower_addresses)
 }
