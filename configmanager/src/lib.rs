@@ -16,9 +16,10 @@ pub trait ConfigManager: Send + Send {
     fn get_name(&self) -> String;
 }
 
-pub trait AddressManager {
+pub trait AddressManager: Send + Send {
     fn get_leader_address(&self) -> Result<String>;
     fn get_follower_addresses(&self) -> Result<Vec<String>>;
+    fn get_all_addresses(&self) -> Result<Vec<String>>;
 }
 
 pub struct ZooKeeperConfigManager {
@@ -114,6 +115,17 @@ impl AddressManager for ZooKeeperAddressManager {
         let instances = self.instances.read().unwrap();
 
         get_follower_addresses(instances)
+    }
+
+    fn get_all_addresses(&self) -> Result<Vec<String>> {
+        let instances = self.instances.read().unwrap();
+        let mut addresses = get_follower_addresses(instances)?;
+
+        let instances = self.instances.read().unwrap();
+        let leader_address = get_leader_address(instances)?;
+        addresses.push(leader_address);
+
+        Ok(addresses)
     }
 }
 
