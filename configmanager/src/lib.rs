@@ -5,7 +5,6 @@ use std::{sync::Arc, time::Duration};
 use std::sync::{RwLock, RwLockReadGuard};
 
 use anyhow::Result;
-use log::info;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zookeeper::{Acl, CreateMode, recipes::leader::LeaderLatch, WatchedEvent, Watcher, ZooKeeper};

@@ -10,10 +10,11 @@ use configmanager::ConfigManager;
 use indexengine::index::Index;
 use indexengine::no_index::NoIndex;
 
-use crate::server::key_value_store::key_value_service_server::{KeyValueService, KeyValueServiceServer};
+use crate::server::key_value_store::key_value_service_server::{KeyValueServiceServer};
 
 mod logging_middleware;
 mod server;
+mod error;
 
 #[derive(Debug, Clone)]
 enum IndexEngine {

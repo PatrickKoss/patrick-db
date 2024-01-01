@@ -1,15 +1,17 @@
 use std::sync::Arc;
-use log::info;
+use log::{error, info};
 use prost::Message;
 use prost_types::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
+use tokio::sync::mpsc::channel;
 
 use configmanager::ConfigManager;
 use indexengine::index::Index;
 use key_value_store::{CreateRequest, CreateResponse, DeleteRequest, DeleteResponse, GetRequest, GetResponse, KeyValue, UpdateRequest, UpdateResponse};
 use key_value_store::key_value_service_server::KeyValueService;
+use crate::error::ServerError;
 
 use crate::server::key_value_store::key_value_service_client::KeyValueServiceClient;
 
@@ -19,7 +21,6 @@ pub mod key_value_store {
 
 pub struct KeyValueStoreImpl {
     index_engine: Mutex<Box<dyn Index<Vec<u8>, Vec<u8>>>>,
-    config_manager: Arc<Mutex<Box<dyn ConfigManager>>>,
     tx: Sender<Replication>,
 }
 
@@ -38,13 +39,12 @@ struct Replication {
 
 impl KeyValueStoreImpl {
     pub async fn new(index_engine: Box<dyn Index<Vec<u8>, Vec<u8>>>, config_manager: Box<dyn ConfigManager>) -> Self {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Replication>(1000);
+        let (tx, rx) = channel::<Replication>(1000);
         let config_manager = Arc::new(Mutex::new(config_manager));
         start_replicator(rx, config_manager.clone()).await;
 
         Self {
             index_engine: Mutex::new(index_engine),
-            config_manager,
             tx,
         }
     }
@@ -68,7 +68,7 @@ async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mut
                     continue;
                 }
             };
-            log::info!("attempt to replicate to followers: {:?}", follower_addresses);
+            info!("attempt to replicate to followers: {:?}", follower_addresses);
 
             for follower_address in follower_addresses {
                 let message = message.clone();
@@ -86,10 +86,10 @@ async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mut
                         });
                         match client.create(request).await {
                             Ok(_) => {
-                                log::info!("Successfully replicated create to follower");
+                                info!("Successfully replicated create to follower");
                             }
                             Err(e) => {
-                                log::error!("Failed to replicate create to follower: {:?}", e);
+                                error!("Failed to replicate create to follower: {:?}", e);
                             }
                         }
                     }
@@ -126,44 +126,17 @@ impl KeyValueService for KeyValueStoreImpl {
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
         println!("Got a request: {:?}", request);
 
-        let key_val = match request.into_inner().key {
-            Some(key_val) => key_val,
-            None => return Err(Status::invalid_argument("key must be set")),
-        };
+        let key_val = request.into_inner().key
+            .ok_or_else(|| ServerError::InvalidArgument("key must be set".to_string()))?;
         let key_bytes = key_val.encode_to_vec();
+
         let mut index_engine = self.index_engine.lock().await;
-        let document = match index_engine.search(&key_bytes) {
-            Ok(document) => document,
-            Err(e) => {
-                return if let Some(index_error) = e.downcast_ref::<indexengine::index::IndexError>() {
-                    match index_error {
-                        indexengine::index::IndexError::NotFound => {
-                            Err(Status::not_found("key not found"))
-                        }
-                        _ => {
-                            Err(Status::internal(e.to_string()))
-                        }
-                    }
-                } else {
-                    Err(Status::internal(e.to_string()))
-                };
-            }
-        };
+        let document = index_engine.search(&key_bytes).map_err(ServerError::from)?;
 
         let bytes = prost::bytes::Bytes::from(document.id);
-        let key = match Value::decode(bytes) {
-            Ok(key) => key,
-            Err(e) => {
-                return Err(Status::internal(e.to_string()));
-            }
-        };
+        let key = Value::decode(bytes).map_err(ServerError::from)?;
         let bytes = prost::bytes::Bytes::from(document.value);
-        let value = match Value::decode(bytes) {
-            Ok(value) => value,
-            Err(e) => {
-                return Err(Status::internal(e.to_string()));
-            }
-        };
+        let value = Value::decode(bytes).map_err(ServerError::from)?;
 
         let reply = GetResponse {
             key_value: Option::from(KeyValue {
@@ -178,56 +151,32 @@ impl KeyValueService for KeyValueStoreImpl {
     async fn create(&self, request: Request<CreateRequest>) -> Result<Response<CreateResponse>, Status> {
         println!("Got a request: {:?}", request);
 
-        let key_value = match request.into_inner().key_value {
-            Some(key_value) => key_value,
-            None => return Err(Status::invalid_argument("key_value must be set")),
-        };
+        let key_value = request.into_inner().key_value
+            .ok_or_else(|| ServerError::InvalidArgument("key_value must be set".to_string()))?;
 
         let replication = Replication {
             action: Action::Add,
             key_value: key_value.clone(),
         };
 
-        let key_val = match key_value.key {
-            Some(key_val) => key_val,
-            None => return Err(Status::invalid_argument("key must be set")),
-        };
+        let key_val = key_value.key.ok_or_else(|| ServerError::InvalidArgument("key must be set".to_string()))?;
         let key_bytes = key_val.encode_to_vec();
 
-        let value_val = match key_value.value {
-            Some(value_val) => value_val,
-            None => return Err(Status::invalid_argument("value must be set")),
-        };
+        let value_val = key_value.value.ok_or_else(|| ServerError::InvalidArgument("value must be set".to_string()))?;
         let value_bytes = value_val.encode_to_vec();
 
         let mut index_engine = self.index_engine.lock().await;
-        match index_engine.insert(indexengine::index::Document {
+        index_engine.insert(indexengine::index::Document {
             id: key_bytes,
             value: value_bytes,
-        }) {
-            Ok(_) => {}
-            Err(e) => {
-                return if let Some(index_error) = e.downcast_ref::<indexengine::index::IndexError>() {
-                    match index_error {
-                        indexengine::index::IndexError::AlreadyExists => {
-                            Err(Status::already_exists("document already exists"))
-                        }
-                        _ => {
-                            Err(Status::internal(e.to_string()))
-                        }
-                    }
-                } else {
-                    Err(Status::internal(e.to_string()))
-                };
-            }
-        };
+        }).map_err(ServerError::from)?;
 
         match self.tx.send(replication).await {
             Ok(_) => {
-                log::info!("Successfully sent replication message");
+                info!("Successfully sent replication message");
             }
             Err(e) => {
-                log::error!("Failed to send replication message: {:?}", e);
+                error!("Failed to send replication message: {:?}", e);
             }
         }
 
@@ -247,5 +196,19 @@ impl KeyValueService for KeyValueStoreImpl {
 
     async fn delete(&self, _request: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
         todo!()
+    }
+}
+
+pub struct ServerError2(anyhow::Error);
+
+impl From<anyhow::Error> for ServerError2 {
+    fn from(err: anyhow::Error) -> Self {
+        ServerError2(err)
+    }
+}
+
+impl From<ServerError2> for Status {
+    fn from(err: ServerError2) -> Self {
+        Status::internal(err.0.to_string())
     }
 }
