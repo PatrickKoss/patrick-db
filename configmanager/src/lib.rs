@@ -5,6 +5,7 @@ use std::{sync::Arc, time::Duration};
 use std::sync::{RwLock, RwLockReadGuard};
 
 use anyhow::Result;
+use log::info;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zookeeper::{Acl, CreateMode, recipes::leader::LeaderLatch, WatchedEvent, Watcher, ZooKeeper};
@@ -50,7 +51,7 @@ impl ZooKeeperConfigManager {
         let service_id = Uuid::new_v4().to_string();
 
         let latch = setup_leader_latch(&zk_arc, &service_id, leader_election_path)?;
-        setup_leader_watch(&zk_arc.clone(), &latch.clone(), &service_id, service_registry_path, instance_address)?;
+        setup_leader_watch(&zk_arc.clone(), &latch.clone(), &service_id, service_registry_path, leader_election_path, instance_address)?;
 
         ensure_parent_node_exists(&zk_arc, service_registry_path)?;
         let instances = Arc::new(RwLock::new(Vec::<Instance>::new()));
@@ -239,6 +240,7 @@ fn setup_leader_watch(
     leader_latch: &LeaderLatch,
     service_id: &str,
     service_registry_path: &str,
+    leader_latch_path: &str,
     instance_address: &str,
 ) -> Result<()> {
     let zk_arc_clone = Arc::clone(zk_arc);
@@ -246,9 +248,10 @@ fn setup_leader_watch(
     let service_path = service_registry_path.to_owned();
     let service_id_owned = service_id.to_owned();
     let instance_address_owned = instance_address.to_owned();
+    let leader_path = leader_latch_path.to_owned();
 
-    zk_arc.get_children_w(service_registry_path, move |_| {
-        handle_leader_change(&zk_arc_clone, &service_path, &leader_latch_clone, &service_id_owned, &instance_address_owned)
+    zk_arc.get_children_w(leader_latch_path, move |_| {
+        handle_leader_change(&zk_arc_clone, &service_path, &leader_latch_clone, &service_id_owned, &leader_path, &instance_address_owned)
     })?;
 
     Ok(())
@@ -259,6 +262,7 @@ fn handle_leader_change(
     service_discovery_path: &str,
     leader_latch: &LeaderLatch,
     service_id: &str,
+    leader_latch_path: &str,
     instance_address: &str,
 ) {
     log::info!("leader changed. Current service {}, is_leader: {}", service_id, leader_latch.has_leadership());
@@ -272,12 +276,12 @@ fn handle_leader_change(
     }
 
     match update_service(zk_arc, service_id, service_discovery_path, instance_address, leader_latch.has_leadership()) {
-        Ok(_) => log::info!("service updated"),
+        Ok(_) => log::info!("service successfully updated"),
         Err(e) => log::error!("error updating service: {:?}", e),
     }
 
     // Reset the watch
-    if let Err(e) = setup_leader_watch(zk_arc, leader_latch, service_id, service_discovery_path, instance_address) {
+    if let Err(e) = setup_leader_watch(zk_arc, leader_latch, service_id, service_discovery_path, leader_latch_path, instance_address) {
         log::error!("Error resetting watch for service path {}: {:?}", service_discovery_path, e);
     }
 }
@@ -296,14 +300,6 @@ fn get_follower_addresses(instances: RwLockReadGuard<Vec<Instance>>) -> Result<V
         .filter(|&instance| !instance.is_leader)
         .map(|instance| instance.address.clone())
         .collect();
-
-    // filter duplicates
-    let follower_addresses: Vec<String> = follower_addresses.into_iter().fold(Vec::new(), |mut acc, x| {
-        if !acc.contains(&x) {
-            acc.push(x);
-        }
-        acc
-    });
 
     Ok(follower_addresses)
 }

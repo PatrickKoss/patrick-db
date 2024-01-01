@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use log::info;
 use prost::Message;
 use prost_types::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -53,8 +54,14 @@ async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mut
     let config_manager = config_manager.clone();
     tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            log::info!("Got replication message: {:?}", message);
-            let follower_addresses = match config_manager.lock().await.get_follower_addresses() {
+            let config_manager_unlocked = config_manager.lock().await;
+            if !config_manager_unlocked.is_leader() {
+                info!("Not leader, skipping replication");
+                continue;
+            }
+
+            info!("Got replication message: {:?}", message);
+            let follower_addresses = match config_manager_unlocked.get_follower_addresses() {
                 Ok(follower_addresses) => follower_addresses,
                 Err(e) => {
                     log::error!("Failed to get follower addresses: {:?}", e);
@@ -170,10 +177,6 @@ impl KeyValueService for KeyValueStoreImpl {
 
     async fn create(&self, request: Request<CreateRequest>) -> Result<Response<CreateResponse>, Status> {
         println!("Got a request: {:?}", request);
-        let config_manager = self.config_manager.lock().await;
-        if !config_manager.is_leader() {
-            return Err(Status::unavailable("not a leader"));
-        }
 
         let key_value = match request.into_inner().key_value {
             Some(key_value) => key_value,
