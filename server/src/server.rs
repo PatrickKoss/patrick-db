@@ -50,6 +50,17 @@ impl KeyValueStoreImpl {
             tx,
         }
     }
+
+    async fn send_replication(&self, replication: Replication) {
+        match self.tx.send(replication).await {
+            Ok(_) => {
+                info!("Successfully sent replication message");
+            }
+            Err(e) => {
+                error!("Failed to send replication message: {:?}", e);
+            }
+        }
+    }
 }
 
 async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mutex<Box<dyn ConfigManager>>>) {
@@ -169,14 +180,7 @@ impl KeyValueService for KeyValueStoreImpl {
             value: value_bytes,
         }).map_err(ServerError::from)?;
 
-        match self.tx.send(replication).await {
-            Ok(_) => {
-                info!("Successfully sent replication message");
-            }
-            Err(e) => {
-                error!("Failed to send replication message: {:?}", e);
-            }
-        }
+        self.send_replication(replication).await;
 
         let reply = CreateResponse {
             key_value: Some(KeyValue {
@@ -209,14 +213,7 @@ impl KeyValueService for KeyValueStoreImpl {
             value: value_bytes,
         }).map_err(ServerError::from)?;
 
-        match self.tx.send(replication).await {
-            Ok(_) => {
-                info!("Successfully sent replication message");
-            }
-            Err(e) => {
-                error!("Failed to send replication message: {:?}", e);
-            }
-        }
+        self.send_replication(replication).await;
 
         let reply = UpdateResponse {
             key_value: Some(KeyValue {
@@ -244,14 +241,7 @@ impl KeyValueService for KeyValueStoreImpl {
         let mut index_engine = self.index_engine.lock().await;
         index_engine.delete(&key_bytes).map_err(ServerError::from)?;
 
-        match self.tx.send(replication).await {
-            Ok(_) => {
-                info!("Successfully sent replication message");
-            }
-            Err(e) => {
-                error!("Failed to send replication message: {:?}", e);
-            }
-        }
+        self.send_replication(replication).await;
 
         let reply = DeleteResponse {
             key_value: Some(KeyValue {
