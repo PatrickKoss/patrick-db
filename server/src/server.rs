@@ -1,19 +1,21 @@
 use std::sync::Arc;
+
 use log::{error, info};
+use prost::bytes::Bytes;
 use prost::Message;
 use prost_types::Value;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::channel;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
-use tokio::sync::mpsc::channel;
 
 use configmanager::ConfigManager;
-use indexengine::index::Index;
+use indexengine::index::{Document, Index};
 use key_value_store::{CreateRequest, CreateResponse, DeleteRequest, DeleteResponse, GetRequest, GetResponse, KeyValue, UpdateRequest, UpdateResponse};
+use key_value_store::key_value_service_client::KeyValueServiceClient;
 use key_value_store::key_value_service_server::KeyValueService;
-use crate::error::ServerError;
 
-use crate::server::key_value_store::key_value_service_client::KeyValueServiceClient;
+use crate::error::ServerError;
 
 pub mod key_value_store {
     tonic::include_proto!("server");
@@ -64,7 +66,7 @@ async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mut
             let follower_addresses = match config_manager_unlocked.get_follower_addresses() {
                 Ok(follower_addresses) => follower_addresses,
                 Err(e) => {
-                    log::error!("Failed to get follower addresses: {:?}", e);
+                    error!("Failed to get follower addresses: {:?}", e);
                     continue;
                 }
             };
@@ -75,7 +77,7 @@ async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mut
                 let mut client = match KeyValueServiceClient::connect(follower_address).await {
                     Ok(client) => client,
                     Err(e) => {
-                        log::error!("Failed to connect to follower: {:?}", e);
+                        error!("Failed to connect to follower: {:?}", e);
                         continue;
                     }
                 };
@@ -100,7 +102,7 @@ async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mut
                         match client.update(request).await {
                             Ok(_) => {}
                             Err(e) => {
-                                log::error!("Failed to replicate update to follower: {:?}", e);
+                                error!("Failed to replicate update to follower: {:?}", e);
                             }
                         }
                     }
@@ -111,7 +113,7 @@ async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mut
                         match client.delete(request).await {
                             Ok(_) => {}
                             Err(e) => {
-                                log::error!("Failed to replicate delete to follower: {:?}", e);
+                                error!("Failed to replicate delete to follower: {:?}", e);
                             }
                         }
                     }
@@ -124,8 +126,6 @@ async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mut
 #[tonic::async_trait]
 impl KeyValueService for KeyValueStoreImpl {
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
-        println!("Got a request: {:?}", request);
-
         let key_val = request.into_inner().key
             .ok_or_else(|| ServerError::InvalidArgument("key must be set".to_string()))?;
         let key_bytes = key_val.encode_to_vec();
@@ -133,13 +133,13 @@ impl KeyValueService for KeyValueStoreImpl {
         let mut index_engine = self.index_engine.lock().await;
         let document = index_engine.search(&key_bytes).map_err(ServerError::from)?;
 
-        let bytes = prost::bytes::Bytes::from(document.id);
+        let bytes = Bytes::from(document.id);
         let key = Value::decode(bytes).map_err(ServerError::from)?;
-        let bytes = prost::bytes::Bytes::from(document.value);
+        let bytes = Bytes::from(document.value);
         let value = Value::decode(bytes).map_err(ServerError::from)?;
 
         let reply = GetResponse {
-            key_value: Option::from(KeyValue {
+            key_value: Some(KeyValue {
                 key: key.into(),
                 value: value.into(),
             })
@@ -149,8 +149,6 @@ impl KeyValueService for KeyValueStoreImpl {
     }
 
     async fn create(&self, request: Request<CreateRequest>) -> Result<Response<CreateResponse>, Status> {
-        println!("Got a request: {:?}", request);
-
         let key_value = request.into_inner().key_value
             .ok_or_else(|| ServerError::InvalidArgument("key_value must be set".to_string()))?;
 
@@ -166,7 +164,7 @@ impl KeyValueService for KeyValueStoreImpl {
         let value_bytes = value_val.encode_to_vec();
 
         let mut index_engine = self.index_engine.lock().await;
-        index_engine.insert(indexengine::index::Document {
+        index_engine.insert(Document {
             id: key_bytes,
             value: value_bytes,
         }).map_err(ServerError::from)?;
@@ -181,7 +179,7 @@ impl KeyValueService for KeyValueStoreImpl {
         }
 
         let reply = CreateResponse {
-            key_value: Option::from(KeyValue {
+            key_value: Some(KeyValue {
                 key: key_val.into(),
                 value: value_val.into(),
             })
@@ -190,25 +188,78 @@ impl KeyValueService for KeyValueStoreImpl {
         Ok(Response::new(reply))
     }
 
-    async fn update(&self, _request: Request<UpdateRequest>) -> Result<Response<UpdateResponse>, Status> {
-        todo!()
+    async fn update(&self, request: Request<UpdateRequest>) -> Result<Response<UpdateResponse>, Status> {
+        let key_value = request.into_inner().key_value
+            .ok_or_else(|| ServerError::InvalidArgument("key_value must be set".to_string()))?;
+
+        let replication = Replication {
+            action: Action::Update,
+            key_value: key_value.clone(),
+        };
+
+        let key_val = key_value.key.ok_or_else(|| ServerError::InvalidArgument("key must be set".to_string()))?;
+        let key_bytes = key_val.encode_to_vec();
+
+        let value_val = key_value.value.ok_or_else(|| ServerError::InvalidArgument("value must be set".to_string()))?;
+        let value_bytes = value_val.encode_to_vec();
+
+        let mut index_engine = self.index_engine.lock().await;
+        index_engine.update(&key_bytes.clone(), Document {
+            id: key_bytes,
+            value: value_bytes,
+        }).map_err(ServerError::from)?;
+
+        match self.tx.send(replication).await {
+            Ok(_) => {
+                info!("Successfully sent replication message");
+            }
+            Err(e) => {
+                error!("Failed to send replication message: {:?}", e);
+            }
+        }
+
+        let reply = UpdateResponse {
+            key_value: Some(KeyValue {
+                key: key_val.into(),
+                value: value_val.into(),
+            })
+        };
+
+        Ok(Response::new(reply))
     }
 
-    async fn delete(&self, _request: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
-        todo!()
-    }
-}
+    async fn delete(&self, request: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
+        let key = request.into_inner().key
+            .ok_or_else(|| ServerError::InvalidArgument("key_value must be set".to_string()))?;
+        let key_bytes = key.encode_to_vec();
 
-pub struct ServerError2(anyhow::Error);
+        let replication = Replication {
+            action: Action::Delete,
+            key_value: KeyValue {
+                key: Some(key.clone()),
+                value: None,
+            },
+        };
 
-impl From<anyhow::Error> for ServerError2 {
-    fn from(err: anyhow::Error) -> Self {
-        ServerError2(err)
-    }
-}
+        let mut index_engine = self.index_engine.lock().await;
+        index_engine.delete(&key_bytes).map_err(ServerError::from)?;
 
-impl From<ServerError2> for Status {
-    fn from(err: ServerError2) -> Self {
-        Status::internal(err.0.to_string())
+        match self.tx.send(replication).await {
+            Ok(_) => {
+                info!("Successfully sent replication message");
+            }
+            Err(e) => {
+                error!("Failed to send replication message: {:?}", e);
+            }
+        }
+
+        let reply = DeleteResponse {
+            key_value: Some(KeyValue {
+                key: key.into(),
+                value: None,
+            })
+        };
+
+        Ok(Response::new(reply))
     }
 }
