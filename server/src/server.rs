@@ -63,77 +63,6 @@ impl KeyValueStoreImpl {
     }
 }
 
-async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mutex<Box<dyn ConfigManager>>>) {
-    let config_manager = config_manager.clone();
-    tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            let config_manager_unlocked = config_manager.lock().await;
-            if !config_manager_unlocked.is_leader() {
-                info!("Not leader, skipping replication");
-                continue;
-            }
-
-            info!("Got replication message: {:?}", message);
-            let follower_addresses = match config_manager_unlocked.get_follower_addresses() {
-                Ok(follower_addresses) => follower_addresses,
-                Err(e) => {
-                    error!("Failed to get follower addresses: {:?}", e);
-                    continue;
-                }
-            };
-            info!("attempt to replicate to followers: {:?}", follower_addresses);
-
-            for follower_address in follower_addresses {
-                let message = message.clone();
-                let mut client = match KeyValueServiceClient::connect(follower_address).await {
-                    Ok(client) => client,
-                    Err(e) => {
-                        error!("Failed to connect to follower: {:?}", e);
-                        continue;
-                    }
-                };
-                match message.action {
-                    Action::Add => {
-                        let request = Request::new(CreateRequest {
-                            key_value: Some(message.key_value),
-                        });
-                        match client.create(request).await {
-                            Ok(_) => {
-                                info!("Successfully replicated create to follower");
-                            }
-                            Err(e) => {
-                                error!("Failed to replicate create to follower: {:?}", e);
-                            }
-                        }
-                    }
-                    Action::Update => {
-                        let request = Request::new(UpdateRequest {
-                            key_value: Some(message.key_value),
-                        });
-                        match client.update(request).await {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("Failed to replicate update to follower: {:?}", e);
-                            }
-                        }
-                    }
-                    Action::Delete => {
-                        let request = Request::new(DeleteRequest {
-                            key: message.key_value.key,
-                        });
-                        match client.delete(request).await {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("Failed to replicate delete to follower: {:?}", e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
-
 #[tonic::async_trait]
 impl KeyValueService for KeyValueStoreImpl {
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
@@ -251,6 +180,92 @@ impl KeyValueService for KeyValueStoreImpl {
         };
 
         Ok(Response::new(reply))
+    }
+}
+
+
+async fn start_replicator(mut rx: Receiver<Replication>, config_manager: Arc<Mutex<Box<dyn ConfigManager>>>) {
+    let config_manager = config_manager.clone();
+    tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            let config_manager_unlocked = config_manager.lock().await;
+            if !config_manager_unlocked.is_leader() {
+                info!("Not leader, skipping replication");
+                continue;
+            }
+
+            info!("Got replication message: {:?}", message);
+            let follower_addresses = match config_manager_unlocked.get_follower_addresses() {
+                Ok(follower_addresses) => follower_addresses,
+                Err(e) => {
+                    error!("Failed to get follower addresses: {:?}", e);
+                    continue;
+                }
+            };
+            info!("attempt to replicate to followers: {:?}", follower_addresses);
+
+            for follower_address in follower_addresses {
+                replicate_to_follower(follower_address, message.clone()).await;
+            }
+        }
+    });
+}
+
+async fn replicate_to_follower(follower_address: String, message: Replication) {
+    let mut client = match KeyValueServiceClient::connect(follower_address).await {
+        Ok(client) => client,
+        Err(e) => {
+            error!("Failed to connect to follower: {:?}", e);
+            return;
+        }
+    };
+    handle_message(&mut client, message).await;
+}
+
+
+async fn handle_message(client: &mut KeyValueServiceClient<tonic::transport::Channel>, message: Replication) {
+    match message.action {
+        Action::Add => replicate_create(client, message.key_value).await,
+        Action::Update => replicate_update(client, message.key_value).await,
+        Action::Delete => replicate_delete(client, message.key_value.key).await,
+    }
+}
+
+async fn replicate_create(client: &mut KeyValueServiceClient<tonic::transport::Channel>, key_value: KeyValue) {
+    let request = Request::new(CreateRequest {
+        key_value: Some(key_value),
+    });
+    match client.create(request).await {
+        Ok(_) => {
+            info!("Successfully replicated create to follower");
+        }
+        Err(e) => {
+            error!("Failed to replicate create to follower: {:?}", e);
+        }
+    }
+}
+
+async fn replicate_update(client: &mut KeyValueServiceClient<tonic::transport::Channel>, key_value: KeyValue) {
+    let request = Request::new(UpdateRequest {
+        key_value: Some(key_value),
+    });
+    match client.update(request).await {
+        Ok(_) => {}
+        Err(e) => {
+            error!("Failed to replicate update to follower: {:?}", e);
+        }
+    }
+}
+
+async fn replicate_delete(client: &mut KeyValueServiceClient<tonic::transport::Channel>, key: Option<Value>) {
+    let request = Request::new(DeleteRequest {
+        key,
+    });
+    match client.delete(request).await {
+        Ok(_) => {}
+        Err(e) => {
+            error!("Failed to replicate delete to follower: {:?}", e);
+        }
     }
 }
 
