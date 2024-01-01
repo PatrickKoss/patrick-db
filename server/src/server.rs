@@ -253,3 +253,69 @@ impl KeyValueService for KeyValueStoreImpl {
         Ok(Response::new(reply))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+
+    #[cfg(test)]
+    use mockall::mock;
+    use mockall::predicate;
+    use prost_types::value::Kind;
+
+    use super::*;
+
+    mock! {
+        IndexImpl{}
+        impl Index<Vec<u8>, Vec<u8>> for IndexImpl {
+            fn insert(&mut self, document: Document<Vec<u8>, Vec<u8>>) -> Result<()>;
+            fn update(&mut self, key: &Vec<u8>, document: Document<Vec<u8>, Vec<u8>>) -> Result<()>;
+            fn delete(&mut self, key: &Vec<u8>) -> Result<()>;
+            fn search(&mut self, key: &Vec<u8>) -> Result<Document<Vec<u8>, Vec<u8>>>;
+        }
+    }
+
+    mock! {
+        ConfigManagerImpl{}
+        impl ConfigManager for ConfigManagerImpl {
+            fn is_leader(&self) -> bool;
+            fn get_follower_addresses(&self) -> Result<Vec<String>>;
+            fn get_leader_address(&self) -> Result<String>;
+            fn get_name(&self) -> String;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get() {
+        let key = Value {
+            kind: Some(Kind::StringValue("test".to_string())),
+        };
+        let key_bytes = key.encode_to_vec();
+        let key_bytes_clone = key.encode_to_vec();
+
+        let mut mock_index = MockIndexImpl::new();
+        mock_index.expect_search()
+            .with(predicate::always())
+            .returning(move |_| Ok(Document {
+                id: key_bytes.clone(),
+                value: key_bytes_clone.clone(),
+            }));
+        let mut mock_config_manager = MockConfigManagerImpl::new();
+        mock_config_manager.expect_get_follower_addresses()
+            .returning(|| Ok(vec![]));
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(GetRequest {
+            key: Some(key),
+        });
+
+        let response = service.get(request).await.unwrap();
+        let key_value = response.into_inner().key_value.unwrap();
+        let key = match key_value.key.unwrap().kind {
+            Some(Kind::StringValue(s)) => s,
+            _ => String::from(""),
+        };
+        assert_eq!(key, "test".to_string());
+    }
+}

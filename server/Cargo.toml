@@ -26,6 +26,9 @@ storageengine = { path = "../storageengine" }
 indexengine = { path = "../indexengine" }
 anyhow = "1.0.77"
 
+[dev-dependencies]
+mockall = "0.11.4"
+
 [build-dependencies]
 tonic-buf-build = "0.1.2"
 tonic-build = "0.10"
