@@ -257,7 +257,6 @@ impl KeyValueService for KeyValueStoreImpl {
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
-
     #[cfg(test)]
     use mockall::mock;
     use mockall::predicate;
@@ -317,5 +316,282 @@ mod tests {
             _ => String::from(""),
         };
         assert_eq!(key, "test".to_string());
+    }
+
+    #[tokio::test]
+    async fn test_get_no_key() {
+        let mock_index = MockIndexImpl::new();
+        let mock_config_manager = MockConfigManagerImpl::new();
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(GetRequest {
+            key: None,
+        });
+
+        let response = service.get(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_get_not_found() {
+        let key = Value {
+            kind: Some(Kind::StringValue("test".to_string())),
+        };
+
+        let mut mock_index = MockIndexImpl::new();
+        mock_index.expect_search()
+            .with(predicate::always())
+            .returning(move |_| Err(indexengine::index::IndexError::NotFound.into()));
+        let mut mock_config_manager = MockConfigManagerImpl::new();
+        mock_config_manager.expect_get_follower_addresses()
+            .returning(|| Ok(vec![]));
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(GetRequest {
+            key: Some(key),
+        });
+
+        let response = service.get(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_create() {
+        let mut mock_index = MockIndexImpl::new();
+        mock_index.expect_insert()
+            .with(predicate::always())
+            .returning(move |_| Ok(()));
+        let mock_config_manager = MockConfigManagerImpl::new();
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(CreateRequest {
+            key_value: Some(KeyValue {
+                key: Some(Value { kind: Some(Kind::StringValue("test".to_string())) }),
+                value: Some(Value { kind: Some(Kind::StringValue("value".to_string())) }),
+            }),
+        });
+
+        let response = service.create(request).await.unwrap();
+
+        let key_value = response.into_inner().key_value.unwrap();
+        let key = match key_value.key.unwrap().kind {
+            Some(Kind::StringValue(s)) => s,
+            _ => String::from(""),
+        };
+        assert_eq!(key, "test".to_string());
+    }
+
+    #[tokio::test]
+    async fn test_create_no_key() {
+        let mock_index = MockIndexImpl::new();
+        let mock_config_manager = MockConfigManagerImpl::new();
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(CreateRequest {
+            key_value: None,
+        });
+
+        let response = service.create(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::InvalidArgument);
+
+        let request = Request::new(CreateRequest {
+            key_value: Some(KeyValue {
+                key: None,
+                value: Some(Value { kind: Some(Kind::StringValue("value".to_string())) }),
+            }),
+        });
+
+        let response = service.create(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_create_already_exists() {
+        let key = Value {
+            kind: Some(Kind::StringValue("test".to_string())),
+        };
+
+        let mut mock_index = MockIndexImpl::new();
+        mock_index.expect_insert()
+            .with(predicate::always())
+            .returning(move |_| Err(indexengine::index::IndexError::AlreadyExists.into()));
+        let mut mock_config_manager = MockConfigManagerImpl::new();
+        mock_config_manager.expect_get_follower_addresses()
+            .returning(|| Ok(vec![]));
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(CreateRequest {
+            key_value: Some(KeyValue {
+                key: Some(key),
+                value: Some(Value { kind: Some(Kind::StringValue("value".to_string())) }),
+            }),
+        });
+
+        let response = service.create(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn test_update() {
+        let key = Value {
+            kind: Some(Kind::StringValue("test".to_string())),
+        };
+        let key_bytes = key.encode_to_vec();
+
+        let mut mock_index = MockIndexImpl::new();
+        mock_index.expect_update()
+            .with(predicate::eq(key_bytes.clone()), predicate::always())
+            .returning(move |_, _| Ok(()));
+        let mock_config_manager = MockConfigManagerImpl::new();
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(UpdateRequest {
+            key_value: Some(KeyValue {
+                key: Some(Value { kind: Some(Kind::StringValue("test".to_string())) }),
+                value: Some(Value { kind: Some(Kind::StringValue("value".to_string())) }),
+            }),
+        });
+
+        let response = service.update(request).await.unwrap();
+
+        let key_value = response.into_inner().key_value.unwrap();
+        let key = match key_value.key.unwrap().kind {
+            Some(Kind::StringValue(s)) => s,
+            _ => String::from(""),
+        };
+        assert_eq!(key, "test".to_string());
+    }
+
+    #[tokio::test]
+    async fn test_update_no_key() {
+        let mock_index = MockIndexImpl::new();
+        let mock_config_manager = MockConfigManagerImpl::new();
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(UpdateRequest {
+            key_value: None,
+        });
+
+        let response = service.update(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::InvalidArgument);
+
+        let request = Request::new(UpdateRequest {
+            key_value: Some(KeyValue {
+                key: None,
+                value: Some(Value { kind: Some(Kind::StringValue("value".to_string())) }),
+            }),
+        });
+
+        let response = service.update(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_update_not_found() {
+        let key = Value {
+            kind: Some(Kind::StringValue("test".to_string())),
+        };
+
+        let mut mock_index = MockIndexImpl::new();
+        mock_index.expect_update()
+            .with(predicate::always(), predicate::always())
+            .returning(move |_, _| Err(indexengine::index::IndexError::NotFound.into()));
+        let mut mock_config_manager = MockConfigManagerImpl::new();
+        mock_config_manager.expect_get_follower_addresses()
+            .returning(|| Ok(vec![]));
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(UpdateRequest {
+            key_value: Some(KeyValue {
+                key: Some(key),
+                value: Some(Value { kind: Some(Kind::StringValue("value".to_string())) }),
+            }),
+        });
+
+        let response = service.update(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_delete() {
+        let key = Value {
+            kind: Some(Kind::StringValue("test".to_string())),
+        };
+        let key_bytes = key.encode_to_vec();
+
+        let mut mock_index = MockIndexImpl::new();
+        mock_index.expect_delete()
+            .with(predicate::eq(key_bytes))
+            .returning(move |_| Ok(()));
+        let mock_config_manager = MockConfigManagerImpl::new();
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(DeleteRequest {
+            key: Some(Value { kind: Some(Kind::StringValue("test".to_string())) }),
+        });
+
+        let response = service.delete(request).await.unwrap();
+
+        let key_value = response.into_inner().key_value.unwrap();
+        let key = match key_value.key.unwrap().kind {
+            Some(Kind::StringValue(s)) => s,
+            _ => String::from(""),
+        };
+        assert_eq!(key, "test".to_string());
+    }
+
+    #[tokio::test]
+    async fn test_delete_no_key() {
+        let mock_index = MockIndexImpl::new();
+        let mock_config_manager = MockConfigManagerImpl::new();
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(DeleteRequest {
+            key: None,
+        });
+
+        let response = service.delete(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_delete_not_found() {
+        let key = Value {
+            kind: Some(Kind::StringValue("test".to_string())),
+        };
+
+        let mut mock_index = MockIndexImpl::new();
+        mock_index.expect_delete()
+            .with(predicate::always())
+            .returning(move |_| Err(indexengine::index::IndexError::NotFound.into()));
+        let mut mock_config_manager = MockConfigManagerImpl::new();
+        mock_config_manager.expect_get_follower_addresses()
+            .returning(|| Ok(vec![]));
+
+        let service = KeyValueStoreImpl::new(Box::new(mock_index), Box::new(mock_config_manager)).await;
+
+        let request = Request::new(DeleteRequest {
+            key: Some(key),
+        });
+
+        let response = service.delete(request).await;
+        assert!(response.is_err());
+        assert_eq!(response.err().unwrap().code(), tonic::Code::NotFound);
     }
 }
