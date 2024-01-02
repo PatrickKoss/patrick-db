@@ -4,10 +4,8 @@
 
 # PatrickDB
 
-![Build Status](https://img.shields.io/travis/com/patrickkoss/patrick-db/master)
-![Coverage](https://img.shields.io/codecov/c/github/patrickkoss/patrick-db)
+![Build Status](https://github.com/patrickkoss/patrick-db/actions/workflows/main.yml/badge.svg)
 ![License](https://img.shields.io/github/license/patrickkoss/patrick-db)
-![Version](https://img.shields.io/github/v/release/patrickkoss/patrick-db)
 ![Issues](https://img.shields.io/github/issues-raw/patrickkoss/patrick-db)
 ![PRs](https://img.shields.io/github/issues-pr/patrickkoss/patrick-db)
 ![Forks](https://img.shields.io/github/forks/patrickkoss/patrick-db)
