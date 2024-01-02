@@ -30,30 +30,64 @@ services:
       ZOO_MY_ID: 3
       ZOO_SERVERS: server.1=zoo1:2888:3888;2181 server.2=zoo2:2888:3888;2181 server.3=zoo3:2888:3888;2181
   server:
-    build: ./server
+    build:
+      context: ./
+      dockerfile: server.Dockerfile
     container_name: "server1"
     environment:
       - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
-      - SERVER_ADDRESS=0.0.0.0:50051
-      - SERVER_URL=http://0.0.0.0:50051
-    volumes:
-      - ./server:/app
-      - ./configmanager:/configmanager
-      - ./bloomfilter:/bloomfilter
-      - ./indexengine:/indexengine
-      - ./storageengine:/storageengine
+      - SERVER_ADDRESS=0.0.0.0:50052
+      - SERVER_URL=http://server:50052
     ports:
-      - "50051:50051"
-    command: sh -c "cargo watch -x 'run --bin server'"
-  zookeeperapp2:
-    build: ./zookeeper
-    container_name: "zookeeperapp2"
+      - "50052:50052"
+  server2:
+    build:
+      context: ./
+      dockerfile: server.Dockerfile
+    container_name: "server2"
     environment:
       - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
-      # - ZOOKEEPER_SERVERS=test:1234
-    volumes:
-      - ./zookeeper:/app
-    command: sh -c "cargo watch -x run"
+      - SERVER_ADDRESS=0.0.0.0:50053
+      - SERVER_URL=http://server2:50053
+    ports:
+      - "50053:50053"
+  server3:
+    build:
+      context: ./
+      dockerfile: server.Dockerfile
+    container_name: "server3"
+    environment:
+      - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
+      - SERVER_ADDRESS=0.0.0.0:50054
+      - SERVER_URL=http://server3:50054
+      - LEADER_ELECTION_PATH=/latch-2
+      - SERVICE_REGISTRY_PATH=/services-2
+    ports:
+      - "50054:50054"
+  server4:
+    build:
+      context: ./
+      dockerfile: server.Dockerfile
+    container_name: "server4"
+    environment:
+      - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
+      - SERVER_ADDRESS=0.0.0.0:50055
+      - SERVER_URL=http://server4:50055
+      - LEADER_ELECTION_PATH=/latch-2
+      - SERVICE_REGISTRY_PATH=/services-2
+    ports:
+      - "50055:50055"
+  router:
+    build:
+      context: ./
+      dockerfile: router.Dockerfile
+    container_name: "router"
+    environment:
+      - ZOOKEEPER_SERVERS=zoo1:2181,zoo2:2181,zoo3:2181
+      - SERVER_ADDRESS=0.0.0.0:50051
+      - SERVICE_REGISTRY_PATHS=/services,/services-2
+    ports:
+      - "50051:50051"
   envoy:
     image: envoyproxy/envoy:v1.28.0
     ports:
