@@ -66,3 +66,12 @@ PROTOC_GEN_GO_GRPC = bin/protoc-gen-go-grpc
 install-protoc-gen-go-grpc: $(PROTOC_GEN_GO_GRPC)
 $(PROTOC_GEN_GO_GRPC):
 	GOBIN=$(PWD)/bin go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+run-router:
+	cargo run --bin router
+
+run-server:
+	cargo run --bin server
+
+run-follower:
+	cargo run --bin server -- --server-address="[::1]:50053" --server-url="http://[::1]:50053" --storage-file-name=patrick2.db

@@ -1,5 +1,8 @@
-run-all-docker:
+run-all-docker: run-zookeeper
 	docker-compose up router server server2 server3 server4 envoy
+
+run-zookeeper:
+	docker-compose up zoo1 zoo2 zoo3
 
 test:
 	for dir in $$(find . -type d); do \

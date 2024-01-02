@@ -3,6 +3,7 @@
 </p>
 
 # PatrickDB
+
 ![Build Status](https://img.shields.io/travis/com/patrickkoss/patrick-db/master)
 ![Coverage](https://img.shields.io/codecov/c/github/patrickkoss/patrick-db)
 ![License](https://img.shields.io/github/license/patrickkoss/patrick-db)
@@ -11,9 +12,8 @@
 ![PRs](https://img.shields.io/github/issues-pr/patrickkoss/patrick-db)
 ![Forks](https://img.shields.io/github/forks/patrickkoss/patrick-db)
 ![Stars](https://img.shields.io/github/stars/patrickkoss/patrick-db)
-![Language](https://img.shields.io/github/languages/top/patrickkoss/patrick-db
 
-patrick-db is a simplified Rust-based database designed to demonstrate distributed database principles. This distributed
+PatrickDB is a simplified Rust-based database designed to demonstrate distributed database principles. This distributed
 key-value store employs Zookeeper for replication and partitioning. Data is stored in a row-based format using a
 file-based system.
 
@@ -24,7 +24,8 @@ patrick-db's storage and index engines can be integrated into other projects.
 
 ![Architecture](./media/architecture.png)
 
-Clients compatible with gRPC or REST can connect to patrick-db, such as the [cli](./server/src/client.rs) tool located in
+Clients compatible with gRPC or REST can connect to patrick-db, such as the [cli](./server/src/client.rs) tool located
+in
 the [server](./server) directory.
 
 Envoy, which serves multiple purposes, is used here to interchange REST and gRPC.
@@ -38,3 +39,24 @@ is chosen.
 
 The [database](server/src/server.rs) itself is a gRPC server that implements a file-based storage system. In its role as
 a leader, it replicates data to followers using statement replication.
+
+# Getting Started
+
+Start all components (Zookeeper, Envoy, Router, and two Partitions with one Leader and Replica) inside docker
+containers:
+
+```bash
+make run-all-docker
+```
+
+Lint all components:
+
+```bash
+make lint
+```
+
+Run all tests:
+
+```bash
+make test
+```
