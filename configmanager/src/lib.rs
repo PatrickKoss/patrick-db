@@ -212,7 +212,7 @@ fn register_service(zk_arc: &Arc<ZooKeeper>, service_id: &str, service_registry_
 
     let instance = Instance {
         id: service_id.to_owned(),
-        is_leader: is_leader,
+        is_leader,
         address: instance_address.to_string(),
     };
     let buf = bincode::serialize(&instance)?;
@@ -228,7 +228,7 @@ fn update_service(zk_arc: &Arc<ZooKeeper>, service_id: &str, service_registry_pa
 
     let instance = Instance {
         id: service_id.to_owned(),
-        is_leader: is_leader,
+        is_leader,
         address: instance_address.to_string(),
     };
     let buf = bincode::serialize(&instance)?;
