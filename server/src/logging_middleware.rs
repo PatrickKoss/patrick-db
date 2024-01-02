@@ -14,7 +14,7 @@ pub struct LoggingInterceptor<S> {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LoggingInterceptorLayer;
+pub struct LoggingInterceptorLayer;
 
 impl<S> Layer<S> for LoggingInterceptorLayer {
     type Service = LoggingInterceptor<S>;

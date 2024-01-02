@@ -45,9 +45,9 @@ struct Args {
     storage_file_name: String,
     #[arg(long, default_value = "localhost:2181,localhost:2182,localhost:2183")]
     zookeeper_servers: String,
-    #[arg(long, default_value = "[::1]:50051")]
+    #[arg(long, default_value = "[::1]:50052")]
     server_address: String,
-    #[arg(long, default_value = "http://[::1]:50051")]
+    #[arg(long, default_value = "http://[::1]:50052")]
     server_url: String,
     #[arg(long, default_value = "/latch")]
     leader_election_path: String,
@@ -91,7 +91,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     log::info!("finished init storage engine");
 
-    // let addr = "0.0.0.0:50051".parse()?;
     let addr = server_address.parse()?;
     let server = server::KeyValueStoreImpl::new(index_engine, Box::new(config_manager)).await;
 
